@@ -133,7 +133,9 @@ public sealed class MainForm : Form
 
     private void RequestRender()
     {
-        if (ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
+        // Resize fires from the constructor before the window exists. A render started then could
+        // never marshal its result back, leaving _running set forever, so wait for the handle.
+        if (!IsHandleCreated || ClientSize.Width <= 0 || ClientSize.Height <= 0) return;
         var want = CurrentView();
 
         if (_running != null)
@@ -168,7 +170,7 @@ public sealed class MainForm : Form
         _running.ContinueWith(t =>
         {
             long ms = sw.ElapsedMilliseconds;
-            if (IsDisposed || !IsHandleCreated) return;
+            if (IsDisposed) return;
             try { BeginInvoke(() => OnRenderFinished(t, target, progress, ms)); }
             catch (InvalidOperationException) { /* form closing */ }
         }, TaskScheduler.Default);
