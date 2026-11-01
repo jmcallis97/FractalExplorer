@@ -6,6 +6,10 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Optimize even in Debug: unoptimized JIT makes the renderer 3-5x slower and erases most
+         of the SIMD gain (Vector256 operators don't get inlined). Stepping through code is a bit
+         less precise as a result; set to false temporarily if you need exact debugging. -->
+    <Optimize>true</Optimize>
   </PropertyGroup>
 
 </Project>
