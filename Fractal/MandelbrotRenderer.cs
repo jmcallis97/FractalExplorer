@@ -1,129 +1,123 @@
 namespace Fractal;
 
 /// <summary>
-/// Computes Mandelbrot images in parallel. Uses (cores - 2) worker threads, minimum 1.
+/// Computes smooth iteration counts in parallel using (cores - 2) worker threads, minimum 1.
+/// Output is colour-independent; see <see cref="Colorizer"/> for turning it into pixels.
 /// </summary>
 public sealed class MandelbrotRenderer
 {
+    public const float Inside = -1f;
+    private const double Bailout = 256.0; // large bailout gives smoother colouring
+    private static readonly double Ln2 = Math.Log(2.0);
+
     public int WorkerCount { get; } = Math.Max(1, Environment.ProcessorCount - 2);
 
-    private readonly int[] _palette = BuildPalette(1024);
-
     /// <summary>
-    /// Renders into an ARGB pixel buffer (width * height).
-    /// centerX/centerY is the complex-plane point at the image center;
-    /// scale is the complex-plane width of one pixel.
+    /// Fills <paramref name="target"/>. If <paramref name="source"/> shares the same pixel grid
+    /// (i.e. the view was only panned or resized), overlapping pixels are copied rather than
+    /// recomputed, so only newly exposed areas cost anything.
     /// </summary>
-    public void Render(int[] pixels, int width, int height,
-                       double centerX, double centerY, double scale,
-                       int maxIterations, CancellationToken token)
+    public void Render(Field target, Field? source, RenderProgress progress, CancellationToken token)
     {
-        var options = new ParallelOptions
+        var v = target.View;
+        int w = v.Width, h = v.Height;
+        var dst = target.Values;
+
+        // Overlap rectangle, in global grid coordinates.
+        long ox0 = 0, ox1 = 0, oy0 = 0, oy1 = 0;
+        bool reuse = false;
+        if (source != null && source.View.CanReuse(v))
         {
-            MaxDegreeOfParallelism = WorkerCount,
-            CancellationToken = token
-        };
+            var s = source.View;
+            ox0 = Math.Max(v.OriginX, s.OriginX);
+            ox1 = Math.Min(v.OriginX + w, s.OriginX + s.Width);
+            oy0 = Math.Max(v.OriginY, s.OriginY);
+            oy1 = Math.Min(v.OriginY + h, s.OriginY + s.Height);
+            reuse = ox0 < ox1 && oy0 < oy1;
+        }
 
-        double left = centerX - width / 2.0 * scale;
-        double top = centerY - height / 2.0 * scale;
-        const double bailout = 256.0; // large bailout gives smoother coloring
-        double log2 = Math.Log(2.0);
+        progress.Total = (long)w * h - (reuse ? (ox1 - ox0) * (oy1 - oy0) : 0);
 
-        // Rows are handed out dynamically, which balances load well since
-        // rows near the set take far longer than rows outside it.
-        Parallel.For(0, height, options, (py, state) =>
+        var options = new ParallelOptions { MaxDegreeOfParallelism = WorkerCount, CancellationToken = token };
+
+        // Rows are handed out dynamically, which balances load well since rows near the set
+        // take far longer than rows outside it.
+        Parallel.For(0, h, options, (py, state) =>
         {
             if (token.IsCancellationRequested) { state.Stop(); return; }
 
-            double ci = top + py * scale;
-            int rowOffset = py * width;
+            long gy = v.OriginY + py;
+            double ci = v.AnchorY - gy * v.Scale;
+            int row = py * w;
 
-            for (int px = 0; px < width; px++)
+            if (reuse && gy >= oy0 && gy < oy1)
             {
-                double cr = left + px * scale;
-
-                // Quick reject: main cardioid and period-2 bulb are always inside.
-                double q = (cr - 0.25) * (cr - 0.25) + ci * ci;
-                if (q * (q + (cr - 0.25)) <= 0.25 * ci * ci ||
-                    (cr + 1) * (cr + 1) + ci * ci <= 0.0625)
-                {
-                    pixels[rowOffset + px] = unchecked((int)0xFF000000);
-                    continue;
-                }
-
-                double zr = 0, zi = 0, zr2 = 0, zi2 = 0;
-                int i = 0;
-                while (i < maxIterations && zr2 + zi2 <= bailout)
-                {
-                    zi = 2 * zr * zi + ci;
-                    zr = zr2 - zi2 + cr;
-                    zr2 = zr * zr;
-                    zi2 = zi * zi;
-                    i++;
-                }
-
-                if (i >= maxIterations)
-                {
-                    pixels[rowOffset + px] = unchecked((int)0xFF000000);
-                }
-                else
-                {
-                    // Smooth (continuous) iteration count to avoid banding.
-                    double logZn = Math.Log(zr2 + zi2) / 2;
-                    double nu = Math.Log(logZn / log2) / log2;
-                    double smooth = i + 1 - nu;
-                    pixels[rowOffset + px] = ColorFor(smooth);
-                }
+                var s = source!.View;
+                int a = (int)(ox0 - v.OriginX);
+                int b = (int)(ox1 - v.OriginX);
+                int srcIndex = (int)(gy - s.OriginY) * s.Width + (int)(ox0 - s.OriginX);
+                Array.Copy(source.Values, srcIndex, dst, row + a, b - a);
+                ComputeSpan(dst, row, 0, a, v, ci);
+                ComputeSpan(dst, row, b, w, v, ci);
+                progress.Add(w - (b - a));
+            }
+            else
+            {
+                ComputeSpan(dst, row, 0, w, v, ci);
+                progress.Add(w);
             }
         });
+
+        token.ThrowIfCancellationRequested();
     }
 
-    private int ColorFor(double smooth)
+    private static void ComputeSpan(float[] dst, int row, int from, int to, in Viewport v, double ci)
     {
-        double t = smooth * 8.0; // palette stretch; tweak for different looks
-        int n = _palette.Length;
-        int idx = (int)t;
-        double frac = t - idx;
-        int c1 = _palette[((idx % n) + n) % n];
-        int c2 = _palette[(((idx + 1) % n) + n) % n];
-        return Lerp(c1, c2, frac);
-    }
-
-    private static int Lerp(int a, int b, double t)
-    {
-        int r = (int)(((a >> 16) & 0xFF) * (1 - t) + ((b >> 16) & 0xFF) * t);
-        int g = (int)(((a >> 8) & 0xFF) * (1 - t) + ((b >> 8) & 0xFF) * t);
-        int bl = (int)((a & 0xFF) * (1 - t) + (b & 0xFF) * t);
-        return unchecked((int)0xFF000000) | (r << 16) | (g << 8) | bl;
-    }
-
-    /// <summary>Classic "Ultra Fractal"-style gradient, cycled.</summary>
-    private static int[] BuildPalette(int size)
-    {
-        (double pos, int r, int g, int b)[] stops =
-        [
-            (0.0,    0,   7, 100),
-            (0.16,  32, 107, 203),
-            (0.42, 237, 255, 255),
-            (0.6425, 255, 170,  0),
-            (0.8575,  0,   2,   0),
-            (1.0,    0,   7, 100),
-        ];
-
-        var palette = new int[size];
-        for (int i = 0; i < size; i++)
+        int maxIter = v.MaxIterations;
+        for (int px = from; px < to; px++)
         {
-            double p = (double)i / size;
-            int s = 0;
-            while (s < stops.Length - 2 && p > stops[s + 1].pos) s++;
-            var (p0, r0, g0, b0) = stops[s];
-            var (p1, r1, g1, b1) = stops[s + 1];
-            double t = (p - p0) / (p1 - p0);
-            int r = (int)(r0 + (r1 - r0) * t);
-            int g = (int)(g0 + (g1 - g0) * t);
-            int b = (int)(b0 + (b1 - b0) * t);
-            palette[i] = unchecked((int)0xFF000000) | (r << 16) | (g << 8) | b;
+            double cr = v.AnchorX + (v.OriginX + px) * v.Scale;
+            dst[row + px] = Iterate(cr, ci, maxIter);
         }
-        return palette;
+    }
+
+    private static float Iterate(double cr, double ci, int maxIter)
+    {
+        // Quick reject: main cardioid and period-2 bulb are always inside.
+        double xq = cr - 0.25;
+        double q = xq * xq + ci * ci;
+        if (q * (q + xq) <= 0.25 * ci * ci) return Inside;
+        if ((cr + 1) * (cr + 1) + ci * ci <= 0.0625) return Inside;
+
+        double zr = 0, zi = 0, zr2 = 0, zi2 = 0;
+        double pr = 0, pi = 0; // periodicity check (Brent): bails early on interior points
+        int check = 8, counter = 0;
+
+        for (int i = 0; i < maxIter; i++)
+        {
+            zi = 2 * zr * zi + ci;
+            zr = zr2 - zi2 + cr;
+            zr2 = zr * zr;
+            zi2 = zi * zi;
+
+            if (zr2 + zi2 > Bailout)
+            {
+                // Smooth (continuous) iteration count to avoid banding.
+                double logZn = Math.Log(zr2 + zi2) * 0.5;
+                double nu = Math.Log(logZn / Ln2) / Ln2;
+                double smooth = i + 2 - nu;
+                return smooth < 0 ? 0f : (float)smooth;
+            }
+
+            if (zr == pr && zi == pi) return Inside;
+            if (++counter == check)
+            {
+                counter = 0;
+                check <<= 1;
+                pr = zr;
+                pi = zi;
+            }
+        }
+        return Inside;
     }
 }
