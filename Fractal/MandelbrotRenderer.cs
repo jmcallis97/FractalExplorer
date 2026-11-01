@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Runtime.Intrinsics;
 
 namespace Fractal;
@@ -106,9 +107,24 @@ public sealed class MandelbrotRenderer
         long ty0 = FloorDiv(v.OriginY, TileSize), ty1 = FloorDiv(v.OriginY + h - 1, TileSize);
         int tilesX = (int)(tx1 - tx0 + 1), tilesY = (int)(ty1 - ty0 + 1);
 
+        // Centre-out order, so a progressively displayed render fills in from where you're looking.
+        var order = new int[tilesX * tilesY];
+        var distance = new long[order.Length];
+        for (int i = 0; i < order.Length; i++)
+        {
+            order[i] = i;
+            long cx = (tx0 + i % tilesX) * TileSize + TileSize / 2 - v.OriginX - w / 2;
+            long cy = (ty0 + i / tilesX) * TileSize + TileSize / 2 - v.OriginY - h / 2;
+            distance[i] = cx * cx + cy * cy;
+        }
+        Array.Sort(distance, order);
+
         // Tiles are handed out dynamically, which balances load well since tiles near the set
         // take far longer than ones outside it (and suits the i9's mix of P- and E-cores).
-        Parallel.For(0, tilesX * tilesY, options, (t, state) =>
+        // NoBuffering hands tiles out strictly in order (Parallel.For would pre-split the range,
+        // starting each thread at a different point in the list).
+        var tiles = Partitioner.Create(order, EnumerablePartitionerOptions.NoBuffering);
+        Parallel.ForEach(tiles, options, (t, state) =>
         {
             if (token.IsCancellationRequested) { state.Stop(); return; }
 

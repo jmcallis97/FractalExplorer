@@ -35,6 +35,7 @@ public static class Colorizer
             for (int x = 0; x < w; x++)
             {
                 float s = values[row + x];
+                if (float.IsNaN(s)) { dest[row + x] = 0; continue; } // not computed yet: transparent
                 if (s < 0)
                 {
                     dest[row + x] = showFilled && s == MandelbrotRenderer.FilledInside ? FilledColor : InsideColor;

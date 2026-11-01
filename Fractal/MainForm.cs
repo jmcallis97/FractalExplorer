@@ -38,12 +38,22 @@ public sealed class MainForm : Form
     private CancellationTokenSource? _runningCts;
     private Viewport _runningView;
     private RenderProgress? _runningProgress;
+    private Field? _runningTarget;
     private double _runningStarted;
     private long _lastRenderMs, _lastRenderPixels;
+    private double _msPerMegapixel;        // from the last full (non-reuse) render; predicts slow renders
 
-    // ---- Display ----------------------------------------------------------
-    private Bitmap? _bitmap;
-    private int[]? _colorBuffer;
+    // ---- Progressive rendering ---------------------------------------------
+    // Renders predicted to take longer than this get a quick low-resolution preview first.
+    private const double PreviewThresholdMs = 100;
+    private const double PartialRefreshSeconds = 0.1;
+    private bool _progressive = true;
+    private double _lastPartialRefresh;
+
+    // ---- Display: drawn bottom to top ------------------------------------
+    private readonly DisplayLayer _baseLayer = new();                            // last completed render
+    private readonly DisplayLayer _previewLayer = new() { SmoothUpscale = true }; // low-res preview
+    private readonly DisplayLayer _partialLayer = new();                         // in-progress render
 
     // ---- Colour -------------------------------------------------------------
     private readonly List<Palette> _palettes = Palette.BuiltIns();
@@ -176,25 +186,69 @@ public sealed class MainForm : Form
         _runningCts = cts;
         _runningView = view;
         _runningProgress = progress;
+        _runningTarget = target;
         _runningStarted = _clock.Elapsed.TotalSeconds;
 
+        bool reuse = source != null && source.View.CanReuse(view);
+        int[] previewFactors = reuse ? [] : ChoosePreviewFactors(view);
+
         var sw = Stopwatch.StartNew();
-        _running = Task.Run(() => _renderer.Render(target, source, progress, cts.Token), cts.Token);
+        _running = Task.Run(() =>
+        {
+            // Coarse previews first: tiny cost (1/64 of the pixels at factor 8) but something
+            // sharp-ish on screen almost immediately.
+            foreach (int factor in previewFactors)
+            {
+                var pv = PreviewView(view, factor);
+                var pf = new Field(pv, new float[pv.Width * pv.Height]);
+                _renderer.Render(pf, null, new RenderProgress(), cts.Token);
+                Post(() => OnPreviewReady(target, pf));
+            }
+            _renderer.Render(target, source, progress, cts.Token);
+        }, cts.Token);
         _running.ContinueWith(t =>
         {
             long ms = sw.ElapsedMilliseconds;
-            if (IsDisposed) return;
-            try { BeginInvoke(() => OnRenderFinished(t, target, progress, ms)); }
-            catch (InvalidOperationException) { /* form closing */ }
+            Post(() => OnRenderFinished(t, target, progress, ms, reuse));
         }, TaskScheduler.Default);
     }
 
-    private void OnRenderFinished(Task task, Field target, RenderProgress progress, long ms)
+    private void Post(Action action)
+    {
+        if (IsDisposed) return;
+        try { BeginInvoke(action); }
+        catch (InvalidOperationException) { /* form closing */ }
+    }
+
+    private int[] ChoosePreviewFactors(Viewport view)
+    {
+        if (!_progressive) return [];
+        double estimateMs = _msPerMegapixel * view.Width * view.Height / 1e6;
+        if (estimateMs < PreviewThresholdMs) return [];
+        return estimateMs < 1500 ? [8] : [16, 4];
+    }
+
+    /// <summary>Same centre and iteration limit, <paramref name="factor"/>× coarser pixels.</summary>
+    private static Viewport PreviewView(Viewport v, int factor) =>
+        new(v.CenterX, v.CenterY, v.Scale * factor, 0, 0,
+            (v.Width + factor - 1) / factor, (v.Height + factor - 1) / factor, v.MaxIterations);
+
+    private void OnPreviewReady(Field target, Field preview)
+    {
+        if (_runningTarget != target) return; // a newer render has started
+        _previewLayer.Field = preview;
+        _partialLayer.Field = null;           // older partial would sit on top of the newer preview
+        ColorizeLayer(_previewLayer);
+        Invalidate();
+    }
+
+    private void OnRenderFinished(Task task, Field target, RenderProgress progress, long ms, bool reuse)
     {
         _running = null;
         _runningCts?.Dispose();
         _runningCts = null;
         _runningProgress = null;
+        _runningTarget = null;
 
         if (task.IsCompletedSuccessfully)
         {
@@ -202,11 +256,17 @@ public sealed class MainForm : Form
             _field = target;
             _lastRenderMs = ms;
             _lastRenderPixels = progress.Total;
+            if (!reuse) _msPerMegapixel = ms / (target.View.Width * (double)target.View.Height / 1e6);
+            _baseLayer.Field = target;
+            _previewLayer.Field = null;
+            _partialLayer.Field = null;
             Recolor();
         }
         else
         {
-            _spare = target.Values;
+            // Keep a cancelled render's partial image on screen (it's still the newest imagery),
+            // so don't recycle its buffer while that layer shows it.
+            if (_partialLayer.Field != target) _spare = target.Values;
             if (task.IsFaulted) ShowToast("Render failed: " + task.Exception?.GetBaseException().Message);
         }
 
@@ -219,36 +279,17 @@ public sealed class MainForm : Form
         Invalidate();
     }
 
-    /// <summary>Re-applies the palette to the last computed field. No fractal maths involved.</summary>
+    /// <summary>Re-applies the palette to every visible layer. No fractal maths involved.</summary>
     private void Recolor()
     {
-        if (_field == null) return;
-        var v = _field.View;
-        int n = v.Width * v.Height;
-        if (_colorBuffer?.Length != n) _colorBuffer = new int[n];
-        if (_bitmap == null || _bitmap.Width != v.Width || _bitmap.Height != v.Height)
-        {
-            _bitmap?.Dispose();
-            _bitmap = new Bitmap(v.Width, v.Height, PixelFormat.Format32bppPArgb);
-        }
-
-        Colorizer.Colorize(_field, ActivePalette, _mapping, _density, _offset, _colorBuffer, _renderer.WorkerCount, _showFilled);
-
-        var data = _bitmap.LockBits(new Rectangle(0, 0, v.Width, v.Height), ImageLockMode.WriteOnly, _bitmap.PixelFormat);
-        try
-        {
-            if (data.Stride == v.Width * 4)
-                Marshal.Copy(_colorBuffer, 0, data.Scan0, n);
-            else
-                for (int y = 0; y < v.Height; y++)
-                    Marshal.Copy(_colorBuffer, y * v.Width, data.Scan0 + y * data.Stride, v.Width);
-        }
-        finally
-        {
-            _bitmap.UnlockBits(data);
-        }
+        ColorizeLayer(_baseLayer);
+        ColorizeLayer(_previewLayer);
+        ColorizeLayer(_partialLayer);
         Invalidate();
     }
+
+    private void ColorizeLayer(DisplayLayer layer) =>
+        layer.Colorize(ActivePalette, _mapping, _density, _offset, _renderer.WorkerCount, _showFilled);
 
     private void OnTick(object? sender, EventArgs e)
     {
@@ -256,11 +297,26 @@ public sealed class MainForm : Form
         double dt = Math.Min(now - _lastTick, 0.1);
         _lastTick = now;
 
+        // Show the in-progress render as it fills in (only for renders slow enough to notice).
+        bool refreshPartial = _progressive && _runningTarget != null
+                              && now - _runningStarted > 0.12
+                              && now - _lastPartialRefresh >= PartialRefreshSeconds;
+        if (refreshPartial)
+        {
+            _partialLayer.Field = _runningTarget;
+            _lastPartialRefresh = now;
+        }
+
         if (_cycling && _field != null)
         {
             _offset += _cycleDirection * _cycleSpeed * dt;
             _offset -= Math.Floor(_offset);
             Recolor();
+        }
+        else if (refreshPartial)
+        {
+            ColorizeLayer(_partialLayer);
+            Invalidate();
         }
         else if (_runningProgress != null)
         {
@@ -499,6 +555,12 @@ case Keys.V:
                 ShowToast(_renderer.UseSimd ? "SIMD on (AVX2, 8 px/step)" : "SIMD off (scalar)");
                 ForceFullRender();
                 return true;
+            case Keys.Q:
+                _progressive = !_progressive;
+                if (!_progressive) { _previewLayer.Field = null; _partialLayer.Field = null; }
+                ShowToast(_progressive ? "Progressive rendering on" : "Progressive rendering off");
+                Invalidate();
+                return true;
             case Keys.B:
                 _renderer.UseInteriorFill = !_renderer.UseInteriorFill;
                 ShowToast(_renderer.UseInteriorFill ? "Interior fill on" : "Interior fill off");
@@ -666,40 +728,18 @@ case Keys.V:
         var g = e.Graphics;
         g.Clear(Color.Black);
 
-        if (_bitmap != null && _field != null)
-            DrawFractal(g, _field.View, CurrentView());
+        // Each layer is drawn transformed into the current view, so while panning or zooming the
+        // newest imagery follows the mouse until the exact render replaces it.
+        var cur = CurrentView();
+        _baseLayer.Draw(g, cur);
+        _previewLayer.Draw(g, cur);
+        _partialLayer.Draw(g, cur);
 
         DrawProgress(g);
         if (_showInfo) DrawInfo(g);
         if (_pickerOpen) DrawPicker(g);
         if (_showHelp) DrawHelp(g);
         if (_toast != null) DrawToast(g);
-    }
-
-    /// <summary>
-    /// Draws the last completed image transformed into the current view. While panning or
-    /// zooming this gives instant feedback; the exact render replaces it when ready.
-    /// </summary>
-    private void DrawFractal(Graphics g, Viewport f, Viewport cur)
-    {
-        g.PixelOffsetMode = PixelOffsetMode.Half;
-        if (f.SameGrid(cur))
-        {
-            // Pure pan/resize: exact integer offset, no scaling.
-            g.InterpolationMode = InterpolationMode.NearestNeighbor;
-            int x = (int)(f.OriginX - cur.OriginX);
-            int y = (int)(f.OriginY - cur.OriginY);
-            g.DrawImage(_bitmap!, new Rectangle(x, y, f.Width, f.Height));
-        }
-        else
-        {
-            double ratio = f.Scale / cur.Scale;
-            double x0 = (f.AnchorX + f.OriginX * f.Scale - cur.AnchorX) / cur.Scale - cur.OriginX;
-            double y0 = (cur.AnchorY - f.AnchorY + f.OriginY * f.Scale) / cur.Scale - cur.OriginY;
-            g.InterpolationMode = ratio > 1 ? InterpolationMode.NearestNeighbor : InterpolationMode.Bilinear;
-            g.DrawImage(_bitmap!, new RectangleF((float)x0, (float)y0, (float)(f.Width * ratio), (float)(f.Height * ratio)));
-        }
-        g.PixelOffsetMode = PixelOffsetMode.Default;
     }
 
     private void DrawProgress(Graphics g)
@@ -718,7 +758,7 @@ case Keys.V:
         string text =
             $"Center: {v.CenterX:R}, {v.CenterY:R}\n" +
             $"Zoom: {Zoom:G4}x   Iterations: {MaxIterations}\n" +
-            $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}   {status} ({_lastRenderPixels:N0} px rendered)\n" +
+            $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}{(_progressive ? "+Prog" : "")}   {status} ({_lastRenderPixels:N0} px rendered)\n" +
             $"Palette: {ActivePalette.Name}   Mapping: {_mapping}   Density: {_density:0.##}x   Cycling: {(_cycling ? $"{_cycleSpeed:0.##}/s" : "off")}\n" +
             "H: help   P: palettes   I: hide info";
 
@@ -786,6 +826,7 @@ case Keys.V:
             "  M                   Mapping: Linear / Sqrt / Log\n" +
             "  V                   SIMD on/off (compare render times)\n" +
             "  B / D               Interior fill on/off / show filled areas\n" +
+            "  Q                   Progressive rendering (preview + live fill-in) on/off\n" +
             "\n" +
             "WINDOW\n" +
             "  F11 / Alt+Enter / double-click   Fullscreen (Esc exits)\n" +
@@ -818,7 +859,9 @@ case Keys.V:
     {
         _timer.Stop();
         _runningCts?.Cancel();
-        _bitmap?.Dispose();
+        _baseLayer.Dispose();
+        _previewLayer.Dispose();
+        _partialLayer.Dispose();
         foreach (var b in _stripCache.Values) b.Dispose();
         _infoFont.Dispose();
         _toastFont.Dispose();
