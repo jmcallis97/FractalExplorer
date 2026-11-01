@@ -66,6 +66,7 @@ public sealed class MainForm : Form
     private bool _showInfo = true, _showHelp, _pickerOpen;
     private string? _toast;
     private double _toastUntil;
+    private bool _forceFull; // next render ignores the previous field (for honest V-toggle timing)
     private bool _dragging;
     private Point _dragStart;
     private long _dragPanX0, _dragPanY0;
@@ -150,9 +151,20 @@ public sealed class MainForm : Form
         Invalidate();
     }
 
+/// <summary>Re-renders everything from scratch, e.g. to time a kernel change.</summary>
+    private void ForceFullRender()
+    {
+        if (!IsHandleCreated) return;
+        _forceFull = true;
+        if (_running != null) _runningCts!.Cancel();
+        else StartRender(CurrentView());
+        Invalidate();
+    }
+
     private void StartRender(Viewport view)
     {
-        var source = _field;
+        var source = _forceFull ? null : _field;
+        _forceFull = false;
         int n = view.Width * view.Height;
         var values = _spare?.Length == n ? _spare : new float[n];
         _spare = null;
@@ -201,7 +213,7 @@ public sealed class MainForm : Form
         if (ClientSize.Width > 0 && ClientSize.Height > 0)
         {
             var want = CurrentView();
-            if (_field == null || _field.View != want) StartRender(want);
+            if (_field == null || _field.View != want || _forceFull) StartRender(want);
         }
         Invalidate();
     }
@@ -480,6 +492,12 @@ public sealed class MainForm : Form
             case Keys.OemOpenBrackets:
                 ChangeDensity(1 / 1.25);
                 return true;
+case Keys.V:
+                if (!MandelbrotRenderer.SimdSupported) { ShowToast("SIMD not supported on this CPU"); return true; }
+                _renderer.UseSimd = !_renderer.UseSimd;
+                ShowToast(_renderer.UseSimd ? "SIMD on (AVX2, 8 px/step)" : "SIMD off (scalar)");
+                ForceFullRender();
+                return true;
             case Keys.M:
                 _mapping = (ColorMapping)(((int)_mapping + 1) % Enum.GetValues<ColorMapping>().Length);
                 ShowToast($"Colour mapping: {_mapping}");
@@ -689,7 +707,7 @@ public sealed class MainForm : Form
         string text =
             $"Center: {v.CenterX:R}, {v.CenterY:R}\n" +
             $"Zoom: {Zoom:G4}x   Iterations: {MaxIterations}\n" +
-            $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores   {status} ({_lastRenderPixels:N0} px computed)\n" +
+            $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores   {(_renderer.UseSimd ? "SIMD" : "Scalar")}   {status} ({_lastRenderPixels:N0} px computed)\n" +
             $"Palette: {ActivePalette.Name}   Mapping: {_mapping}   Density: {_density:0.##}x   Cycling: {(_cycling ? $"{_cycleSpeed:0.##}/s" : "off")}\n" +
             "H: help   P: palettes   I: hide info";
 
@@ -755,6 +773,7 @@ public sealed class MainForm : Form
             "  Shift+Wheel         Rotate palette by hand\n" +
             "  Ctrl+Wheel or [ ]   Colour density\n" +
             "  M                   Mapping: Linear / Sqrt / Log\n" +
+            "  V                   SIMD on/off (compare render times)\n" +
             "\n" +
             "WINDOW\n" +
             "  F11 / Alt+Enter / double-click   Fullscreen (Esc exits)\n" +
