@@ -66,6 +66,7 @@ public sealed class MainForm : Form
     private bool _showInfo = true, _showHelp, _pickerOpen;
     private string? _toast;
     private double _toastUntil;
+    private bool _showFilled; // tint pixels that interior fill skipped
     private bool _forceFull; // next render ignores the previous field (for honest V-toggle timing)
     private bool _dragging;
     private Point _dragStart;
@@ -231,7 +232,7 @@ public sealed class MainForm : Form
             _bitmap = new Bitmap(v.Width, v.Height, PixelFormat.Format32bppPArgb);
         }
 
-        Colorizer.Colorize(_field, ActivePalette, _mapping, _density, _offset, _colorBuffer, _renderer.WorkerCount);
+        Colorizer.Colorize(_field, ActivePalette, _mapping, _density, _offset, _colorBuffer, _renderer.WorkerCount, _showFilled);
 
         var data = _bitmap.LockBits(new Rectangle(0, 0, v.Width, v.Height), ImageLockMode.WriteOnly, _bitmap.PixelFormat);
         try
@@ -498,6 +499,16 @@ case Keys.V:
                 ShowToast(_renderer.UseSimd ? "SIMD on (AVX2, 8 px/step)" : "SIMD off (scalar)");
                 ForceFullRender();
                 return true;
+            case Keys.B:
+                _renderer.UseInteriorFill = !_renderer.UseInteriorFill;
+                ShowToast(_renderer.UseInteriorFill ? "Interior fill on" : "Interior fill off");
+                ForceFullRender();
+                return true;
+            case Keys.D:
+                _showFilled = !_showFilled;
+                ShowToast(_showFilled ? "Showing filled (skipped) areas in green" : "Filled areas shown normally");
+                Recolor();
+                return true;
             case Keys.M:
                 _mapping = (ColorMapping)(((int)_mapping + 1) % Enum.GetValues<ColorMapping>().Length);
                 ShowToast($"Colour mapping: {_mapping}");
@@ -707,7 +718,7 @@ case Keys.V:
         string text =
             $"Center: {v.CenterX:R}, {v.CenterY:R}\n" +
             $"Zoom: {Zoom:G4}x   Iterations: {MaxIterations}\n" +
-            $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores   {(_renderer.UseSimd ? "SIMD" : "Scalar")}   {status} ({_lastRenderPixels:N0} px computed)\n" +
+            $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}   {status} ({_lastRenderPixels:N0} px rendered)\n" +
             $"Palette: {ActivePalette.Name}   Mapping: {_mapping}   Density: {_density:0.##}x   Cycling: {(_cycling ? $"{_cycleSpeed:0.##}/s" : "off")}\n" +
             "H: help   P: palettes   I: hide info";
 
@@ -774,6 +785,7 @@ case Keys.V:
             "  Ctrl+Wheel or [ ]   Colour density\n" +
             "  M                   Mapping: Linear / Sqrt / Log\n" +
             "  V                   SIMD on/off (compare render times)\n" +
+            "  B / D               Interior fill on/off / show filled areas\n" +
             "\n" +
             "WINDOW\n" +
             "  F11 / Alt+Enter / double-click   Fullscreen (Esc exits)\n" +

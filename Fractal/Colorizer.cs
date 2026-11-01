@@ -18,9 +18,11 @@ public enum ColorMapping
 public static class Colorizer
 {
     private const int InsideColor = unchecked((int)0xFF000000);
+    private const int FilledColor = unchecked((int)0xFF0E3A1A); // dark green: "skipped by interior fill"
 
     public static void Colorize(Field field, Palette palette, ColorMapping mapping,
-                                double density, double offset, int[] dest, int workers)
+                                double density, double offset, int[] dest, int workers,
+                                bool showFilled = false)
     {
         var values = field.Values;
         var lut = palette.Lut;
@@ -33,7 +35,11 @@ public static class Colorizer
             for (int x = 0; x < w; x++)
             {
                 float s = values[row + x];
-                if (s < 0) { dest[row + x] = InsideColor; continue; }
+                if (s < 0)
+                {
+                    dest[row + x] = showFilled && s == MandelbrotRenderer.FilledInside ? FilledColor : InsideColor;
+                    continue;
+                }
 
                 double m = mapping switch
                 {
