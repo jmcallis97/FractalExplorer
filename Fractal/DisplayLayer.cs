@@ -67,10 +67,29 @@ internal sealed class DisplayLayer : IDisposable
         }
         else
         {
+            // On-screen size of one layer pixel. Past these limits the layer is useless (a single
+            // pixel filling the screen, or the whole image shrunk to a dot), and GDI+ coordinates
+            // would overflow - which happens when many wheel notches arrive before a render lands.
             double ratio = f.Scale / cur.Scale;
-            double x0 = (f.AnchorX + f.OriginX * f.Scale - cur.AnchorX) / cur.Scale - cur.OriginX;
-            double y0 = (cur.AnchorY - f.AnchorY + f.OriginY * f.Scale) / cur.Scale - cur.OriginY;
-            var dest = new RectangleF((float)x0, (float)y0, (float)(f.Width * ratio), (float)(f.Height * ratio));
+            if (!(ratio > 1e-4 && ratio < 1e5)) return;
+
+            // Screen position of the layer's pixel (0,0). Anchor offsets come from the
+            // full-precision anchors when deep (plain doubles of two deep anchors can be identical
+            // even though they are many pixels apart).
+            double x0 = (f.AnchorOffsetX(cur) + f.OriginX * f.Scale) / cur.Scale - cur.OriginX;
+            double y0 = (f.OriginY * f.Scale - f.AnchorOffsetY(cur)) / cur.Scale - cur.OriginY;
+            if (!double.IsFinite(x0) || !double.IsFinite(y0)) return;
+
+            // Only draw the part that's on screen, so coordinates stay small however far zoomed.
+            int sx0 = (int)Math.Max(0, Math.Floor(-x0 / ratio));
+            int sy0 = (int)Math.Max(0, Math.Floor(-y0 / ratio));
+            int sx1 = (int)Math.Min(f.Width, Math.Ceiling((cur.Width - x0) / ratio));
+            int sy1 = (int)Math.Min(f.Height, Math.Ceiling((cur.Height - y0) / ratio));
+            if (sx1 <= sx0 || sy1 <= sy0) return;
+
+            var src = new Rectangle(sx0, sy0, sx1 - sx0, sy1 - sy0);
+            var dest = new RectangleF((float)(x0 + sx0 * ratio), (float)(y0 + sy0 * ratio),
+                                      (float)(src.Width * ratio), (float)(src.Height * ratio));
 
             if (ratio > 1 && SmoothUpscale)
             {
@@ -78,12 +97,12 @@ internal sealed class DisplayLayer : IDisposable
                 using var attrs = new ImageAttributes();
                 attrs.SetWrapMode(WrapMode.TileFlipXY);
                 g.InterpolationMode = InterpolationMode.Bilinear;
-                g.DrawImage(_bitmap, Rectangle.Round(dest), 0, 0, f.Width, f.Height, GraphicsUnit.Pixel, attrs);
+                g.DrawImage(_bitmap, Rectangle.Round(dest), src.X, src.Y, src.Width, src.Height, GraphicsUnit.Pixel, attrs);
             }
             else
             {
                 g.InterpolationMode = ratio > 1 ? InterpolationMode.NearestNeighbor : InterpolationMode.Bilinear;
-                g.DrawImage(_bitmap, dest);
+                g.DrawImage(_bitmap, dest, src, GraphicsUnit.Pixel);
             }
         }
         g.PixelOffsetMode = PixelOffsetMode.Default;

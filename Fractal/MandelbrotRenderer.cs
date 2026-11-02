@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
+using Fractal.Deep;
 
 namespace Fractal;
 
@@ -43,13 +45,43 @@ public sealed class MandelbrotRenderer
     /// </summary>
     public bool UseInteriorFill { get; set; } = true;
 
-    private readonly struct Job(float[] dst, Viewport view, bool simd, bool fill, RenderProgress progress)
+    private readonly struct Job(float[] dst, Viewport view, bool simd, bool fill, RenderProgress progress,
+                                ReferenceOrbit? orbit)
     {
         public readonly float[] Dst = dst;
         public readonly Viewport View = view;
         public readonly bool Simd = simd;
         public readonly bool Fill = fill;
         public readonly RenderProgress Progress = progress;
+        /// <summary>Set for deep views: pixels are iterated by perturbation against this orbit.</summary>
+        public readonly ReferenceOrbit? Orbit = orbit;
+    }
+
+    // Reference orbit cache: previews, pans and the full render all share the view's anchor, so
+    // they share one orbit. Only one render runs at a time, but the lock keeps it simple and safe.
+    private readonly Lock _orbitLock = new();
+    private ReferenceOrbit? _orbit;
+    private DeepAnchor? _orbitAnchor;
+    private int _orbitMaxIterations;
+
+    /// <summary>Reference orbit used by the most recent deep render (for the info display).</summary>
+    public ReferenceOrbit? LastOrbit { get; private set; }
+
+    private ReferenceOrbit GetOrbit(DeepAnchor anchor, int maxIterations, CancellationToken token)
+    {
+        lock (_orbitLock)
+        {
+            if (_orbit != null && anchor.Equals(_orbitAnchor) && _orbitMaxIterations == maxIterations)
+                return _orbit;
+        }
+        var orbit = ReferenceOrbit.Compute(anchor.X, anchor.Y, maxIterations, token: token);
+        lock (_orbitLock)
+        {
+            _orbit = orbit;
+            _orbitAnchor = anchor;
+            _orbitMaxIterations = maxIterations;
+        }
+        return orbit;
     }
 
     /// <summary>
@@ -62,7 +94,13 @@ public sealed class MandelbrotRenderer
         var v = target.View;
         int w = v.Width, h = v.Height;
         var dst = target.Values;
-        var job = new Job(dst, v, UseSimd && SimdSupported, UseInteriorFill, progress);
+        ReferenceOrbit? orbit = null;
+        if (v.Deep != null)
+        {
+            orbit = GetOrbit(v.Deep, v.MaxIterations, token);
+            LastOrbit = orbit;
+        }
+        var job = new Job(dst, v, UseSimd && SimdSupported, UseInteriorFill, progress, orbit);
 
         // Overlap rectangle, in global grid coordinates.
         long ox0 = 0, ox1 = 0, oy0 = 0, oy1 = 0;
@@ -244,7 +282,12 @@ public sealed class MandelbrotRenderer
     private static void ComputeIndices(in Job job, ReadOnlySpan<int> indices)
     {
         if (indices.IsEmpty) return;
-        if (job.Simd) ComputeIndicesSimd(job, indices);
+        if (job.Orbit != null)
+        {
+            if (job.Simd && Avx2.IsSupported) ComputeIndicesDeepSimd(job, indices);
+            else ComputeIndicesDeepScalar(job, indices);
+        }
+        else if (job.Simd) ComputeIndicesSimd(job, indices);
         else ComputeIndicesScalar(job, indices);
         job.Progress.Add(indices.Length);
     }
@@ -411,6 +454,154 @@ public sealed class MandelbrotRenderer
                 check <<= 1;
                 prA = zrA; piA = ziA;
                 prB = zrB; piB = ziB;
+            }
+        }
+        return (escIterA, escMagA, escIterB, escMagB);
+    }
+
+    // =========================================================================
+    // Deep zoom kernels (perturbation against the reference orbit at the anchor)
+    // =========================================================================
+
+    // A pixel's offset from the anchor is (global pixel index) × scale. Computed directly like
+    // this it is accurate to the last bit at any depth, and identical however pixels are grouped.
+
+    private static void ComputeIndicesDeepScalar(in Job job, ReadOnlySpan<int> indices)
+    {
+        var v = job.View;
+        int w = v.Width;
+        foreach (int idx in indices)
+        {
+            int py = idx / w, px = idx - py * w;
+            double dcr = (v.OriginX + px) * v.Scale;
+            double dci = -((v.OriginY + py) * v.Scale);
+            job.Dst[idx] = Perturbation.Iterate(job.Orbit!, dcr, dci, v.MaxIterations);
+        }
+    }
+
+    private static unsafe void ComputeIndicesDeepSimd(in Job job, ReadOnlySpan<int> indices)
+    {
+        var v = job.View;
+        var orbit = job.Orbit!;
+        int w = v.Width;
+        Span<double> cr = stackalloc double[8];
+        Span<double> ci = stackalloc double[8];
+        Span<int> idx = stackalloc int[8];
+
+        fixed (double* refR = orbit.Zr, refI = orbit.Zi)
+        {
+            for (int start = 0; start < indices.Length; start += 8)
+            {
+                int n = Math.Min(8, indices.Length - start);
+                for (int k = 0; k < 8; k++)
+                {
+                    int i = indices[start + Math.Min(k, n - 1)];
+                    int py = i / w, px = i - py * w;
+                    idx[k] = i;
+                    cr[k] = (v.OriginX + px) * v.Scale;
+                    ci[k] = -((v.OriginY + py) * v.Scale);
+                }
+
+                var (iterA, magA, iterB, magB) = PerturbSimdX2(refR, refI, orbit.Length - 1,
+                    Vector256.Create((ReadOnlySpan<double>)cr[..4]), Vector256.Create((ReadOnlySpan<double>)ci[..4]),
+                    Vector256.Create((ReadOnlySpan<double>)cr[4..]), Vector256.Create((ReadOnlySpan<double>)ci[4..]),
+                    v.MaxIterations);
+
+                for (int k = 0; k < n; k++)
+                {
+                    double it = k < 4 ? iterA.GetElement(k) : iterB.GetElement(k - 4);
+                    double mag = k < 4 ? magA.GetElement(k) : magB.GetElement(k - 4);
+                    job.Dst[idx[k]] = it < 0 ? Inside : Smooth((int)it, mag);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// <see cref="Perturbation.Iterate"/> for 2×4 pixels at once, with identical per-lane maths
+    /// (same operation order, no FMA), so results match the scalar kernel bit for bit. Each lane
+    /// has its own position in the reference orbit (lanes rebase independently), so reference
+    /// values are fetched with AVX2 gathers.
+    /// </summary>
+    private static unsafe (Vector256<double>, Vector256<double>, Vector256<double>, Vector256<double>) PerturbSimdX2(
+        double* refR, double* refI, int last,
+        Vector256<double> dcrA, Vector256<double> dciA, Vector256<double> dcrB, Vector256<double> dciB, int maxIter)
+    {
+        var escIterA = Vector256.Create(-1.0);
+        var escIterB = escIterA;
+        var escMagA = Vector256<double>.Zero;
+        var escMagB = escMagA;
+        var activeA = Vector256<double>.AllBitsSet;
+        var activeB = activeA;
+
+        var bailout = Vector256.Create(Bailout);
+        var two = Vector256.Create(2.0);
+        var lastIndex = Vector256.Create((long)last);
+        var oneL = Vector256<long>.One;
+
+        // Per lane: offset dz from the reference, index m into it, and Z(m) itself.
+        Vector256<double> dzrA = default, dziA = default, zRefRA = default, zRefIA = default;
+        Vector256<double> dzrB = default, dziB = default, zRefRB = default, zRefIB = default;
+        Vector256<long> mA = default, mB = default;
+
+        for (int i = 0; i < maxIter; i++)
+        {
+            // dz = (2·Z + dz)·dz + dc
+            var trA = two * zRefRA + dzrA;
+            var trB = two * zRefRB + dzrB;
+            var tiA = two * zRefIA + dziA;
+            var tiB = two * zRefIB + dziB;
+            var nrA = trA * dzrA - tiA * dziA + dcrA;
+            var nrB = trB * dzrB - tiB * dziB + dcrB;
+            dziA = trA * dziA + tiA * dzrA + dciA;
+            dziB = trB * dziB + tiB * dzrB + dciB;
+            dzrA = nrA;
+            dzrB = nrB;
+
+            mA += oneL;
+            mB += oneL;
+            zRefRA = Avx2.GatherVector256(refR, mA, 8);
+            zRefIA = Avx2.GatherVector256(refI, mA, 8);
+            zRefRB = Avx2.GatherVector256(refR, mB, 8);
+            zRefIB = Avx2.GatherVector256(refI, mB, 8);
+
+            // Full value z = Z + dz, for the escape test.
+            var zrA = zRefRA + dzrA;
+            var zrB = zRefRB + dzrB;
+            var ziA = zRefIA + dziA;
+            var ziB = zRefIB + dziB;
+            var magA = zrA * zrA + ziA * ziA;
+            var magB = zrB * zrB + ziB * ziB;
+
+            var escA = Vector256.GreaterThan(magA, bailout) & activeA;
+            var escB = Vector256.GreaterThan(magB, bailout) & activeB;
+            if ((escA | escB).ExtractMostSignificantBits() != 0)
+            {
+                escIterA = Vector256.ConditionalSelect(escA, Vector256.Create((double)i), escIterA);
+                escIterB = Vector256.ConditionalSelect(escB, Vector256.Create((double)i), escIterB);
+                escMagA = Vector256.ConditionalSelect(escA, magA, escMagA);
+                escMagB = Vector256.ConditionalSelect(escB, magB, escMagB);
+                activeA = Vector256.AndNot(activeA, escA);
+                activeB = Vector256.AndNot(activeB, escB);
+                if ((activeA | activeB).ExtractMostSignificantBits() == 0) break;
+            }
+
+            // Rebase (|z| < |dz|, or reference exhausted): continue from the start of the
+            // reference with dz = z. Z(0) = 0.
+            var rebA = Vector256.LessThan(magA, dzrA * dzrA + dziA * dziA) | Vector256.Equals(mA, lastIndex).AsDouble();
+            var rebB = Vector256.LessThan(magB, dzrB * dzrB + dziB * dziB) | Vector256.Equals(mB, lastIndex).AsDouble();
+            if ((rebA | rebB).ExtractMostSignificantBits() != 0)
+            {
+                dzrA = Vector256.ConditionalSelect(rebA, zrA, dzrA);
+                dziA = Vector256.ConditionalSelect(rebA, ziA, dziA);
+                dzrB = Vector256.ConditionalSelect(rebB, zrB, dzrB);
+                dziB = Vector256.ConditionalSelect(rebB, ziB, dziB);
+                zRefRA = Vector256.AndNot(zRefRA, rebA);
+                zRefIA = Vector256.AndNot(zRefIA, rebA);
+                zRefRB = Vector256.AndNot(zRefRB, rebB);
+                zRefIB = Vector256.AndNot(zRefIB, rebB);
+                mA = Vector256.AndNot(mA, rebA.AsInt64());
+                mB = Vector256.AndNot(mB, rebB.AsInt64());
             }
         }
         return (escIterA, escMagA, escIterB, escMagB);

@@ -89,5 +89,13 @@ public readonly struct BigFixed
     private static BigInteger Align(BigFixed v, int bits) =>
         v.Bits == bits ? v.Raw : v.Bits < bits ? v.Raw << (bits - v.Bits) : v.Raw >> (v.Bits - bits);
 
+    /// <summary>Decimal text with exactly <paramref name="digits"/> digits after the point (truncated).</summary>
+    public string ToDecimalString(int digits)
+    {
+        var scaled = (BigInteger.Abs(Raw) * BigInteger.Pow(10, digits)) >> Bits;
+        string s = scaled.ToString(CultureInfo.InvariantCulture).PadLeft(digits + 1, '0');
+        return (Raw.Sign < 0 ? "-" : "") + s[..^digits] + "." + s[^digits..];
+    }
+
     public override string ToString() => ToDouble().ToString("R", CultureInfo.InvariantCulture);
 }

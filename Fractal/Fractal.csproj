@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -10,6 +10,8 @@
          of the SIMD gain (Vector256 operators don't get inlined). Stepping through code is a bit
          less precise as a result; set to false temporarily if you need exact debugging. -->
     <Optimize>true</Optimize>
+    <!-- Pointers for AVX2 gathers from the reference orbit in the deep zoom kernel. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>

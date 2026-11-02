@@ -1,3 +1,5 @@
+using Fractal.Deep;
+
 namespace Fractal;
 
 /// <summary>
@@ -8,12 +10,17 @@ namespace Fractal;
 /// (same anchor, scale and iteration limit) produce bit-identical values for the same global
 /// pixel. That is what lets a pan reuse every already-computed pixel and only compute the
 /// newly exposed strip.
+///
+/// When <see cref="Deep"/> is set, the anchor is held in full precision and pixels are computed
+/// by perturbation relative to a reference orbit at the anchor; AnchorX/AnchorY are then just
+/// the nearest doubles, for display.
 /// </summary>
 public readonly record struct Viewport(
     double AnchorX, double AnchorY, double Scale,
     long PanX, long PanY,
     int Width, int Height,
-    int MaxIterations)
+    int MaxIterations,
+    DeepAnchor? Deep = null)
 {
     /// <summary>Global grid column of this view's pixel column 0.</summary>
     public long OriginX => PanX - Width / 2;
@@ -27,8 +34,15 @@ public readonly record struct Viewport(
     public double PixelToReal(double px) => AnchorX + (OriginX + px) * Scale;
     public double PixelToImag(double py) => AnchorY - (OriginY + py) * Scale;
 
+    /// <summary>This anchor minus <paramref name="o"/>'s, accurate even when both are deep.</summary>
+    public double AnchorOffsetX(in Viewport o) =>
+        Deep != null && o.Deep != null ? (Deep.X - o.Deep.X).ToDouble() : AnchorX - o.AnchorX;
+
+    public double AnchorOffsetY(in Viewport o) =>
+        Deep != null && o.Deep != null ? (Deep.Y - o.Deep.Y).ToDouble() : AnchorY - o.AnchorY;
+
     public bool SameGrid(in Viewport o) =>
-        AnchorX == o.AnchorX && AnchorY == o.AnchorY && Scale == o.Scale;
+        AnchorX == o.AnchorX && AnchorY == o.AnchorY && Scale == o.Scale && Equals(Deep, o.Deep);
 
     public bool CanReuse(in Viewport o) => SameGrid(o) && MaxIterations == o.MaxIterations;
 }

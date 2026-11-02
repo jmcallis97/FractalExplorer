@@ -21,6 +21,78 @@ const string SeahorseY = "0.131825904205311970493132056385139";
 
 Console.WriteLine($"Workers: {workers}\n");
 
+if (args.Length > 1 && args[1] == "app")
+{
+    // The app's renderer in deep mode.
+    bool ok = true;
+    foreach (var (name, x, y, scale) in new[]
+    {
+        ("seahorse 1e-15", SeahorseX, SeahorseY, 1e-15),
+        ("c = i 1e-100  ", "0", "1", 1e-100),
+        ("c = i 1e-280  ", "0", "1", 1e-280),
+    })
+    {
+        int w = 1280, h = 720, maxIter = MaxIterFor(scale, w);
+        int bits = BigFixed.BitsFor(scale);
+        var anchor = new DeepAnchor(BigFixed.Parse(x, bits), BigFixed.Parse(y, bits));
+        var view = new Viewport(anchor.X.ToDouble(), anchor.Y.ToDouble(), scale, 0, 0, w, h, maxIter, anchor);
+        float[] RenderWith(Viewport v, bool simd, bool fill, Field? source = null)
+        {
+            var f = new Field(v, new float[v.Width * v.Height]);
+            new MandelbrotRenderer { UseSimd = simd, UseInteriorFill = fill }.Render(f, source, new RenderProgress(), CancellationToken.None);
+            return f.Values;
+        }
+        int Diff(float[] a, float[] b) => a.Zip(b).Count(p => BitConverter.SingleToInt32Bits(p.First) != BitConverter.SingleToInt32Bits(p.Second));
+
+        var scalar = RenderWith(view, false, false);
+        var simd = RenderWith(view, true, false);
+        var standalone = new float[w * h];
+        Perturbation.Render(new DeepView(anchor.X, anchor.Y, scale, w, h, maxIter),
+                            ReferenceOrbit.Compute(anchor.X, anchor.Y, maxIter), standalone, workers);
+        var filled = RenderWith(view, true, true);
+        int fillDiff = filled.Zip(simd).Count(p => !(p.First < 0 && p.Second < 0) && p.First != p.Second);
+
+        // Pan: build on the first render, compare with a fresh render of the panned view.
+        var panned = view with { PanX = 137, PanY = -59 };
+        var src = new Field(view, simd);
+        var reused = RenderWith(panned, true, false, src);
+        var fresh = RenderWith(panned, true, false);
+
+        int d1 = Diff(scalar, simd), d2 = Diff(simd, standalone), d3 = Diff(reused, fresh);
+        Console.WriteLine($"{name}: simd vs scalar {d1}, vs standalone {d2}, pan reuse vs fresh {d3}, fill changed {fillDiff} px, inside {simd.Count(f => f < 0)}");
+        ok &= d1 == 0 && d2 == 0 && d3 == 0 && fillDiff < w * h / 1000;
+    }
+
+    // Speed at 4K.
+    {
+        int w = 3840, h = 2160;
+        void Time(string label, Viewport v, bool simd)
+        {
+            var r = new MandelbrotRenderer { UseSimd = simd };
+            var f = new Field(v, new float[w * h]);
+            r.Render(f, null, new RenderProgress(), CancellationToken.None); // warm (orbit cached after)
+            var sw = Stopwatch.StartNew();
+            r.Render(f, null, new RenderProgress(), CancellationToken.None);
+            Console.WriteLine($"4K {label}: {sw.ElapsedMilliseconds} ms");
+        }
+        double s = 1e-12;
+        int bits = BigFixed.BitsFor(s), mi = MaxIterFor(s, w);
+        var a = new DeepAnchor(BigFixed.Parse(SeahorseX, bits), BigFixed.Parse(SeahorseY, bits));
+        var plain = new Viewport(a.X.ToDouble(), a.Y.ToDouble(), s, 0, 0, w, h, mi);
+        Time("seahorse 1e-12 plain SIMD       ", plain, true);
+        Time("seahorse 1e-12 perturbation SIMD", plain with { Deep = a }, true);
+        Time("seahorse 1e-12 perturbation scalar", plain with { Deep = a }, false);
+        s = 1e-15; bits = BigFixed.BitsFor(s); mi = MaxIterFor(s, w);
+        a = new DeepAnchor(BigFixed.Parse(SeahorseX, bits), BigFixed.Parse(SeahorseY, bits));
+        Time("seahorse 1e-15 perturbation SIMD", new Viewport(a.X.ToDouble(), a.Y.ToDouble(), s, 0, 0, w, h, mi, a), true);
+        s = 1e-100; bits = BigFixed.BitsFor(s); mi = MaxIterFor(s, w);
+        a = new DeepAnchor(BigFixed.Parse("0", bits), BigFixed.Parse("1", bits));
+        Time("c = i 1e-100 perturbation SIMD  ", new Viewport(0, 1, s, 0, 0, w, h, mi, a), true);
+    }
+    Console.WriteLine(ok ? "APP CHECKS PASSED" : "APP CHECKS FAILED");
+    return ok ? 0 : 1;
+}
+
 if (args.Length > 1 && args[1] == "diag")
 {
     // The bad pixel at seahorse 1e-15, with references at various distances from it.

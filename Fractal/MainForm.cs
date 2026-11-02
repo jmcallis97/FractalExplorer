@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
+using Fractal.Deep;
 
 namespace Fractal;
 
@@ -14,7 +15,9 @@ public sealed class MainForm : Form
     private const double InitialViewWidth = 3.5;
     private const double InitialCenterX = -0.5;
     private const double InitialCenterY = 0.0;
-    private const double MinScale = 1e-16;       // double-precision floor
+    private const double MinScale = 1e-290;      // perturbation needs pixel offsets within double range
+    /// <summary>Auto mode switches to perturbation (deep zoom) below this pixel size.</summary>
+    private const double DeepThreshold = 1e-13;
     private const double KeyPanFraction = 0.1;   // arrow keys pan this fraction of the window
     // ---------------------------------------------------------------------
 
@@ -24,8 +27,14 @@ public sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 15 };
 
     // ---- View state -----------------------------------------------------
-    private double _anchorX = InitialCenterX, _anchorY = InitialCenterY, _scale;
+    // The anchor is kept in full precision; _anchorX/Y are its nearest doubles.
+    private BigFixed _hx, _hy;
+    private DeepAnchor _deepAnchor = null!;
+    private double _anchorX, _anchorY, _scale;
     private long _panX, _panY;
+
+    private enum DeepMode { Auto, Always, Off }
+    private DeepMode _deepMode = DeepMode.Auto;
     private int _iterationBoost;
 
     // ---- Render pipeline -------------------------------------------------
@@ -103,6 +112,7 @@ public sealed class MainForm : Form
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
 
         _scale = InitialViewWidth / ClientSize.Width;
+        SetAnchor(BigFixed.FromDouble(InitialCenterX, 64), BigFixed.FromDouble(InitialCenterY, 64));
         LoadUserPalettes();
 
         _timer.Tick += OnTick;
@@ -122,8 +132,20 @@ public sealed class MainForm : Form
         }
     }
 
+    private bool UseDeep => _deepMode == DeepMode.Always || (_deepMode == DeepMode.Auto && _scale < DeepThreshold);
+
     private Viewport CurrentView() =>
-        new(_anchorX, _anchorY, _scale, _panX, _panY, ClientSize.Width, ClientSize.Height, MaxIterations);
+        new(_anchorX, _anchorY, _scale, _panX, _panY, ClientSize.Width, ClientSize.Height, MaxIterations,
+            UseDeep ? _deepAnchor : null);
+
+    private void SetAnchor(BigFixed x, BigFixed y)
+    {
+        _hx = x;
+        _hy = y;
+        _deepAnchor = new DeepAnchor(x, y);
+        _anchorX = x.ToDouble();
+        _anchorY = y.ToDouble();
+    }
 
     private Palette ActivePalette => _palettes[_hoverIndex >= 0 ? _hoverIndex : _paletteIndex];
 
@@ -228,10 +250,14 @@ public sealed class MainForm : Form
         return estimateMs < 1500 ? [8] : [16, 4];
     }
 
-    /// <summary>Same centre and iteration limit, <paramref name="factor"/>× coarser pixels.</summary>
+    /// <summary>
+    /// Same anchor and iteration limit, <paramref name="factor"/>× coarser pixels, centred to
+    /// within one coarse pixel. Sharing the anchor means a deep preview reuses the reference orbit.
+    /// </summary>
     private static Viewport PreviewView(Viewport v, int factor) =>
-        new(v.CenterX, v.CenterY, v.Scale * factor, 0, 0,
-            (v.Width + factor - 1) / factor, (v.Height + factor - 1) / factor, v.MaxIterations);
+        new(v.AnchorX, v.AnchorY, v.Scale * factor,
+            (long)Math.Round((double)v.PanX / factor), (long)Math.Round((double)v.PanY / factor),
+            (v.Width + factor - 1) / factor, (v.Height + factor - 1) / factor, v.MaxIterations, v.Deep);
 
     private void OnPreviewReady(Field target, Field preview)
     {
@@ -354,17 +380,24 @@ public sealed class MainForm : Form
             return;
         }
 
-        // Zoom, keeping the complex point under the cursor fixed on screen.
+        // Zoom, keeping the complex point under the cursor fixed on screen. Done in full
+        // precision: new anchor = anchor + (cursor's global pixel) × old scale
+        //                              - (cursor's offset from centre) × new scale.
         var v = CurrentView();
-        double pointR = v.PixelToReal(e.X);
-        double pointI = v.PixelToImag(e.Y);
         double maxScale = InitialViewWidth * 4 / Math.Max(1, v.Width);
         double newScale = Math.Clamp(v.Scale / Math.Pow(ZoomPerNotch, notches), MinScale, maxScale);
+        bool wasDeep = UseDeep;
 
+        int bits = BigFixed.BitsFor(Math.Min(newScale, v.Scale));
+        long gx = v.OriginX + e.X, gy = v.OriginY + e.Y;
+        SetAnchor(
+            _hx.WithBits(bits) + BigFixed.FromDouble(gx * v.Scale, bits) - BigFixed.FromDouble((e.X - v.Width / 2) * newScale, bits),
+            _hy.WithBits(bits) - BigFixed.FromDouble(gy * v.Scale, bits) + BigFixed.FromDouble((e.Y - v.Height / 2) * newScale, bits));
         _scale = newScale;
         _panX = _panY = 0;
-        _anchorX = pointR - (e.X - v.Width / 2) * newScale;
-        _anchorY = pointI + (e.Y - v.Height / 2) * newScale;
+
+        if (UseDeep != wasDeep)
+            ShowToast(UseDeep ? "Deep zoom: perturbation on" : "Deep zoom off (plain doubles)");
 
         if (_dragging) BeginDrag(e.Location); // keep dragging smoothly after a zoom
         RequestRender();
@@ -571,6 +604,19 @@ case Keys.V:
                 ShowToast(_showFilled ? "Showing filled (skipped) areas in green" : "Filled areas shown normally");
                 Recolor();
                 return true;
+            case Keys.X:
+                _deepMode = (DeepMode)(((int)_deepMode + 1) % 3);
+                ShowToast(_deepMode switch
+                {
+                    DeepMode.Auto => $"Deep zoom: auto (perturbation below {DeepThreshold:0e0} per pixel)",
+                    DeepMode.Always => "Deep zoom: always perturbation",
+                    _ => "Deep zoom: off (plain doubles - blocky when deep)",
+                }, 2.5);
+                RequestRender();
+                return true;
+            case Keys.Control | Keys.C:
+                CopyLocation();
+                return true;
             case Keys.M:
                 _mapping = (ColorMapping)(((int)_mapping + 1) % Enum.GetValues<ColorMapping>().Length);
                 ShowToast($"Colour mapping: {_mapping}");
@@ -587,10 +633,35 @@ case Keys.V:
         RequestRender();
     }
 
+    /// <summary>View centre in full precision, with enough digits to pin down a pixel.</summary>
+    private (string X, string Y) CenterText(Viewport v)
+    {
+        int bits = Math.Max(_hx.Bits, BigFixed.BitsFor(v.Scale));
+        var cx = _hx.WithBits(bits) + BigFixed.FromDouble(v.PanX * v.Scale, bits);
+        var cy = _hy.WithBits(bits) - BigFixed.FromDouble(v.PanY * v.Scale, bits);
+        int digits = Math.Max(16, (int)Math.Ceiling(-Math.Log10(v.Scale)) + 2);
+        return (cx.ToDecimalString(digits), cy.ToDecimalString(digits));
+    }
+
+    private void CopyLocation()
+    {
+        var v = CurrentView();
+        var (x, y) = CenterText(v);
+        string text = $"Re: {x}\r\nIm: {y}\r\nPixel size: {v.Scale:R}\r\nZoom: {Zoom:G6}\r\nIterations: {MaxIterations}";
+        try
+        {
+            Clipboard.SetText(text);
+            ShowToast("Location copied to clipboard");
+        }
+        catch (Exception ex) when (ex is ExternalException or ThreadStateException)
+        {
+            ShowToast("Couldn't copy: " + ex.Message);
+        }
+    }
+
     private void ResetView()
     {
-        _anchorX = InitialCenterX;
-        _anchorY = InitialCenterY;
+        SetAnchor(BigFixed.FromDouble(InitialCenterX, 64), BigFixed.FromDouble(InitialCenterY, 64));
         _panX = _panY = 0;
         _scale = InitialViewWidth / Math.Max(1, ClientSize.Width);
         _iterationBoost = 0;
@@ -730,10 +801,14 @@ case Keys.V:
 
         // Each layer is drawn transformed into the current view, so while panning or zooming the
         // newest imagery follows the mouse until the exact render replaces it.
+        // A GDI+ error escaping OnPaint makes WinForms give up on the window for good (red X),
+        // so a layer that can't be drawn is skipped instead.
         var cur = CurrentView();
-        _baseLayer.Draw(g, cur);
-        _previewLayer.Draw(g, cur);
-        _partialLayer.Draw(g, cur);
+        foreach (var layer in (ReadOnlySpan<DisplayLayer>)[_baseLayer, _previewLayer, _partialLayer])
+        {
+            try { layer.Draw(g, cur); }
+            catch (Exception ex) when (ex is OverflowException or ArgumentException or ExternalException) { }
+        }
 
         DrawProgress(g);
         if (_showInfo) DrawInfo(g);
@@ -755,9 +830,16 @@ case Keys.V:
     {
         var v = CurrentView();
         string status = _runningProgress != null ? $"Rendering {_runningProgress.Fraction:P0}" : $"Last render: {_lastRenderMs} ms";
+        var (cx, cy) = CenterText(v);
+        const int maxShown = 40;
+        string Clip(string s) => s.Length <= maxShown ? s : s[..maxShown] + "…";
+        string precision = v.Deep == null
+            ? $"Precision: double{(_deepMode == DeepMode.Off ? " (deep zoom off)" : "")}"
+            : $"Precision: perturbation, {v.Deep.X.Bits}-bit reference" +
+              (_renderer.LastOrbit is { } o ? $" ({o.Length - 1:N0} iters, {o.ComputeTime.TotalMilliseconds:0} ms)" : "");
         string text =
-            $"Center: {v.CenterX:R}, {v.CenterY:R}\n" +
-            $"Zoom: {Zoom:G4}x   Iterations: {MaxIterations}\n" +
+            $"Center: {Clip(cx)}, {Clip(cy)}\n" +
+            $"Zoom: {Zoom:G4}x   Iterations: {MaxIterations}   {precision}\n" +
             $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}{(_progressive ? "+Prog" : "")}   {status} ({_lastRenderPixels:N0} px rendered)\n" +
             $"Palette: {ActivePalette.Name}   Mapping: {_mapping}   Density: {_density:0.##}x   Cycling: {(_cycling ? $"{_cycleSpeed:0.##}/s" : "off")}\n" +
             "H: help   P: palettes   I: hide info";
@@ -813,6 +895,8 @@ case Keys.V:
             "  Middle-click        Center on point\n" +
             "  + / -               More / fewer iterations\n" +
             "  R / Home            Reset view\n" +
+            "  X                   Deep zoom: auto / always / off\n" +
+            "  Ctrl+C              Copy location (full precision)\n" +
             "\n" +
             "COLOUR (instant — no recompute)\n" +
             "  P                   Palette picker (hover previews)\n" +
