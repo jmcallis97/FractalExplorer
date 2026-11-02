@@ -419,7 +419,7 @@ public sealed class MandelbrotRenderer
     // =========================================================================
 
     /// <summary>Smooth (continuous) iteration count to avoid colour banding.</summary>
-    private static float Smooth(int i, double magSquared)
+    public static float Smooth(int i, double magSquared)
     {
         double logZn = Math.Log(magSquared) * 0.5;
         double nu = Math.Log(logZn / Ln2) / Ln2;
