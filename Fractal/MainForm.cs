@@ -708,45 +708,10 @@ case Keys.V:
     /// </summary>
     private bool TryGoTo(string text, out string error)
     {
-        string? re = null, im = null, zoomText = null;
-        foreach (var raw in text.Split('\n'))
-        {
-            var line = raw.Trim();
-            int colon = line.IndexOf(':');
-            if (colon < 0) continue;
-            string key = line[..colon].Trim().ToLowerInvariant(), value = line[(colon + 1)..].Trim();
-            if (key is "re" or "real" or "x") re = value;
-            else if (key is "im" or "imag" or "y") im = value;
-            else if (key == "zoom") zoomText = value.TrimEnd('x', 'X');
-        }
-        if (re == null)
-        {
-            var parts = text.Split((char[])[' ', '\t', ',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-            if (parts.Length >= 2) (re, im) = (parts[0], parts[1]);
-            if (parts.Length >= 3) zoomText = parts[2].TrimEnd('x', 'X');
-        }
-        if (re == null || im == null) { error = "no Re/Im"; return false; }
-
-        double zoom = 1;
-        if (zoomText != null && !double.TryParse(zoomText, System.Globalization.NumberStyles.Float,
-                                                 System.Globalization.CultureInfo.InvariantCulture, out zoom))
-        {
-            error = "bad zoom";
-            return false;
-        }
-        double scale = Math.Clamp(InitialViewWidth / (Math.Max(zoom, 1e-3) * Math.Max(1, ClientSize.Width)), MinScale, 1);
-        try
-        {
-            int bits = BigFixed.BitsFor(scale);
-            var x = BigFixed.Parse(re, bits);
-            var y = BigFixed.Parse(im, bits);
-            SetAnchor(x, y);
-        }
-        catch (FormatException)
-        {
-            error = "bad number";
-            return false;
-        }
+        if (!Fractal.Location.TryParse(text, out var loc, out error)) return false;
+        double scale = Math.Clamp(InitialViewWidth / (loc.Zoom * Math.Max(1, ClientSize.Width)), MinScale, 1);
+        int bits = BigFixed.BitsFor(scale);
+        SetAnchor(BigFixed.Parse(loc.Re, bits), BigFixed.Parse(loc.Im, bits));
         _panX = _panY = 0;
         _scale = scale;
         RequestRender();

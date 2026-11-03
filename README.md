@@ -26,6 +26,22 @@ Open `Fractal.sln` in Rider or Visual Studio, or run:
 dotnet run --project Fractal
 ```
 
+## Zoom videos
+
+`FractalVideo` renders a straight dive into a location: press Ctrl+C in the app, paste into a
+text file, then
+
+```
+dotnet run -c Release --project FractalVideo -- location.txt dive.mp4 --size 3840x2160 --speed 0.5
+```
+
+It renders one keyframe per doubling of zoom at twice the video resolution (on the GPU when
+there is one) and builds every frame from the two nearest keyframes, so frames are
+anti-aliased and only a few hundred fractal renders are needed. Requires ffmpeg
+(`winget install Gyan.FFmpeg`). Run it without arguments to see the options.
+
+## Test bench
+
 `PerturbationLab` is a console test bench for the deep zoom maths: it checks perturbation
 against brute-force full-precision iteration and the app renderer's deep mode
 (`dotnet run -c Release --project PerturbationLab -- <image folder> [app|diag|probe]`).
