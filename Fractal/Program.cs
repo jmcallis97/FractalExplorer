@@ -3,9 +3,11 @@ namespace Fractal;
 static class Program
 {
     [STAThread]
-    static void Main()
+    /// <param name="args">Optional: a text file holding a location copied with Ctrl+C.</param>
+    static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();
-        Application.Run(new MainForm());
+        string? location = args.Length > 0 && File.Exists(args[0]) ? File.ReadAllText(args[0]) : null;
+        Application.Run(new MainForm(location));
     }
 }

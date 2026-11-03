@@ -2,7 +2,9 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Runtime.Intrinsics;
 using System.Runtime.Intrinsics.X86;
+using System.Runtime.InteropServices;
 using Fractal.Deep;
+using Fractal.Gpu;
 
 namespace Fractal;
 
@@ -44,6 +46,22 @@ public sealed class MandelbrotRenderer
     /// off most exactly where rendering is slowest.
     /// </summary>
     public bool UseInteriorFill { get; set; } = true;
+
+    /// <summary>
+    /// GPU for deep views, or null to use the CPU. Set from another thread once the GPU has
+    /// been found and self-tested; cleared again if it ever fails mid-render.
+    /// </summary>
+    public GpuDeep? Gpu { get => Volatile.Read(ref _gpu); set => Volatile.Write(ref _gpu, value); }
+    private GpuDeep? _gpu;
+
+    /// <summary>Use the GPU (when there is one) for deep views.</summary>
+    public bool UseGpu { get; set; } = true;
+
+    /// <summary>Why the GPU stopped being used mid-session, if it did.</summary>
+    public string? GpuFailure { get; private set; }
+
+    /// <summary>True if the last deep render ran on the GPU.</summary>
+    public bool LastRenderUsedGpu { get; private set; }
 
     private readonly struct Job(float[] dst, Viewport view, bool simd, bool fill, RenderProgress progress,
                                 ReferenceOrbit? orbit)
@@ -157,6 +175,25 @@ public sealed class MandelbrotRenderer
         }
         Array.Sort(distance, order);
 
+        LastRenderUsedGpu = false;
+        if (orbit != null && UseGpu && Gpu is { } gpu && GpuDeep.CanRender(v))
+        {
+            try
+            {
+                RenderOnGpu(gpu, job, order, tilesX, tx0, ty0, token);
+                LastRenderUsedGpu = true;
+                return;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                // Driver reset, device removed, out of memory... Stop using the GPU and let the
+                // CPU finish this render (it only computes pixels that are still unknown).
+                Gpu = null;
+                GpuFailure = ex.Message;
+            }
+        }
+
         // Tiles are handed out dynamically, which balances load well since tiles near the set
         // take far longer than ones outside it (and suits the i9's mix of P- and E-cores).
         // NoBuffering hands tiles out strictly in order (Parallel.For would pre-split the range,
@@ -183,6 +220,113 @@ public sealed class MandelbrotRenderer
         });
 
         token.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>
+    /// The interior-fill algorithm below, run breadth first so that each step is one big batch
+    /// of pixels for the GPU: compute the borders of every rectangle at this level, then decide
+    /// for each one whether to fill it, compute it in full, or split it into quarters for the
+    /// next level. Same decisions as the CPU version, so the same pixels get filled.
+    /// </summary>
+    private static void RenderOnGpu(GpuDeep gpu, Job job, int[] tileOrder, int tilesX, long tx0, long ty0,
+                                    CancellationToken token)
+    {
+        var v = job.View;
+        int w = v.Width, h = v.Height;
+        var dst = job.Dst;
+
+        var probe = new List<(int X0, int Y0, int X1, int Y1)>();
+        foreach (int t in tileOrder)
+        {
+            long gx = (tx0 + t % tilesX) * TileSize;
+            long gy = (ty0 + t / tilesX) * TileSize;
+            probe.Add(((int)Math.Max(0, gx - v.OriginX), (int)Math.Max(0, gy - v.OriginY),
+                       (int)Math.Min(w, gx + TileSize - v.OriginX), (int)Math.Min(h, gy + TileSize - v.OriginY)));
+        }
+
+        var full = new List<(int X0, int Y0, int X1, int Y1)>();
+        var examined = new List<(int X0, int Y0, int X1, int Y1)>();
+        // Every pixel is queued at most once per render, so one screen-sized array suffices.
+        int[] batch = ArrayPool<int>.Shared.Rent(w * h);
+        try
+        {
+            while (probe.Count > 0 || full.Count > 0)
+            {
+                token.ThrowIfCancellationRequested();
+                int n = 0;
+                examined.Clear();
+
+                foreach (var r in probe)
+                {
+                    int rw = r.X1 - r.X0, rh = r.Y1 - r.Y0;
+                    if (rw <= 0 || rh <= 0) continue;
+                    if (!job.Fill || rw <= MinFillSize || rh <= MinFillSize)
+                    {
+                        full.Add(r);
+                        continue;
+                    }
+                    for (int x = r.X0; x < r.X1; x++) AddIfUnknown(dst, batch, ref n, r.Y0 * w + x);
+                    for (int x = r.X0; x < r.X1; x++) AddIfUnknown(dst, batch, ref n, (r.Y1 - 1) * w + x);
+                    for (int y = r.Y0 + 1; y < r.Y1 - 1; y++) AddIfUnknown(dst, batch, ref n, y * w + r.X0);
+                    for (int y = r.Y0 + 1; y < r.Y1 - 1; y++) AddIfUnknown(dst, batch, ref n, y * w + r.X1 - 1);
+                    examined.Add(r);
+                }
+                probe.Clear();
+
+                foreach (var r in full)
+                    for (int y = r.Y0; y < r.Y1; y++)
+                        for (int x = r.X0; x < r.X1; x++)
+                            AddIfUnknown(dst, batch, ref n, y * w + x);
+                full.Clear();
+
+                // Rectangles never overlap, so no pixel is queued twice. Order is kept centre-out.
+                gpu.Compute(job.Orbit!, v, batch.AsSpan(0, n), dst, job.Progress, token);
+
+                foreach (var r in examined)
+                {
+                    int rw = r.X1 - r.X0, rh = r.Y1 - r.Y0;
+                    int inside = 0, borderCount = 2 * rw + 2 * (rh - 2);
+                    for (int x = r.X0; x < r.X1; x++)
+                    {
+                        if (dst[r.Y0 * w + x] < 0) inside++;
+                        if (dst[(r.Y1 - 1) * w + x] < 0) inside++;
+                    }
+                    for (int y = r.Y0 + 1; y < r.Y1 - 1; y++)
+                    {
+                        if (dst[y * w + r.X0] < 0) inside++;
+                        if (dst[y * w + r.X1 - 1] < 0) inside++;
+                    }
+
+                    if (inside == 0)
+                    {
+                        full.Add(r);
+                    }
+                    else if (inside == borderCount)
+                    {
+                        long filled = 0;
+                        for (int y = r.Y0 + 1; y < r.Y1 - 1; y++)
+                        {
+                            var span = dst.AsSpan(y * w + r.X0 + 1, rw - 2);
+                            for (int i = 0; i < span.Length; i++)
+                                if (float.IsNaN(span[i])) { span[i] = FilledInside; filled++; }
+                        }
+                        job.Progress.Add(filled);
+                    }
+                    else
+                    {
+                        int mx = r.X0 + rw / 2, my = r.Y0 + rh / 2;
+                        probe.Add((r.X0, r.Y0, mx, my));
+                        probe.Add((mx, r.Y0, r.X1, my));
+                        probe.Add((r.X0, my, mx, r.Y1));
+                        probe.Add((mx, my, r.X1, r.Y1));
+                    }
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<int>.Shared.Return(batch);
+        }
     }
 
     private static long FloorDiv(long a, long b) => a >= 0 ? a / b : -((-a + b - 1) / b);

@@ -3,6 +3,7 @@ using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 using Fractal.Deep;
+using Fractal.Gpu;
 
 namespace Fractal;
 
@@ -101,7 +102,8 @@ public sealed class MainForm : Form
     private FormWindowState _savedState;
     private Rectangle _savedBounds;
 
-    public MainForm()
+    /// <param name="startLocation">Optional location text (as copied with Ctrl+C) to open at.</param>
+    public MainForm(string? startLocation = null)
     {
         Text = "Mandelbrot";
         ClientSize = new Size(1280, 800);
@@ -114,6 +116,8 @@ public sealed class MainForm : Form
         _scale = InitialViewWidth / ClientSize.Width;
         SetAnchor(BigFixed.FromDouble(InitialCenterX, 64), BigFixed.FromDouble(InitialCenterY, 64));
         LoadUserPalettes();
+        if (startLocation != null && !TryGoTo(startLocation, out string error))
+            ShowToast("Couldn't open location: " + error, 4);
 
         _timer.Tick += OnTick;
         _timer.Start();
@@ -153,7 +157,24 @@ public sealed class MainForm : Form
     {
         base.OnShown(e);
         RequestRender();
+
+        // Find and self-test the GPU in the background (takes a few hundred ms); deep renders
+        // use the CPU until it's ready, and for good if there isn't a usable one.
+        Task.Run(() =>
+        {
+            var gpu = GpuDeep.TryCreate(out string reason);
+            Post(() =>
+            {
+                if (IsDisposed) { gpu?.Dispose(); return; }
+                _renderer.Gpu = gpu;
+                _gpuStatus = gpu != null ? gpu.Name : $"none ({reason})";
+                if (gpu != null && UseDeep) ForceFullRender();
+                Invalidate();
+            });
+        });
     }
+
+    private string _gpuStatus = "starting…";
 
     protected override void OnResize(EventArgs e)
     {
@@ -617,6 +638,15 @@ case Keys.V:
             case Keys.Control | Keys.C:
                 CopyLocation();
                 return true;
+            case Keys.Control | Keys.V:
+                PasteLocation();
+                return true;
+            case Keys.U:
+                if (_renderer.Gpu == null) { ShowToast($"No GPU in use: {_renderer.GpuFailure ?? _gpuStatus}", 3); return true; }
+                _renderer.UseGpu = !_renderer.UseGpu;
+                ShowToast(_renderer.UseGpu ? $"GPU on ({_renderer.Gpu.Name}) for deep zoom" : "GPU off (CPU for deep zoom)");
+                if (UseDeep) ForceFullRender();
+                return true;
             case Keys.M:
                 _mapping = (ColorMapping)(((int)_mapping + 1) % Enum.GetValues<ColorMapping>().Length);
                 ShowToast($"Colour mapping: {_mapping}");
@@ -657,6 +687,71 @@ case Keys.V:
         {
             ShowToast("Couldn't copy: " + ex.Message);
         }
+    }
+
+    private void PasteLocation()
+    {
+        string text;
+        try { text = Clipboard.GetText(); }
+        catch (Exception ex) when (ex is ExternalException or ThreadStateException)
+        {
+            ShowToast("Couldn't read clipboard: " + ex.Message);
+            return;
+        }
+        if (TryGoTo(text, out string error)) ShowToast("Went to pasted location");
+        else ShowToast("Clipboard isn't a location: " + error, 3);
+    }
+
+    /// <summary>
+    /// Jumps to a location in the Ctrl+C format ("Re: ...", "Im: ...", "Zoom: ..." lines; the
+    /// zoom keeps the same framing whatever the window size), or plain "re im zoom".
+    /// </summary>
+    private bool TryGoTo(string text, out string error)
+    {
+        string? re = null, im = null, zoomText = null;
+        foreach (var raw in text.Split('\n'))
+        {
+            var line = raw.Trim();
+            int colon = line.IndexOf(':');
+            if (colon < 0) continue;
+            string key = line[..colon].Trim().ToLowerInvariant(), value = line[(colon + 1)..].Trim();
+            if (key is "re" or "real" or "x") re = value;
+            else if (key is "im" or "imag" or "y") im = value;
+            else if (key == "zoom") zoomText = value.TrimEnd('x', 'X');
+        }
+        if (re == null)
+        {
+            var parts = text.Split((char[])[' ', '\t', ',', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2) (re, im) = (parts[0], parts[1]);
+            if (parts.Length >= 3) zoomText = parts[2].TrimEnd('x', 'X');
+        }
+        if (re == null || im == null) { error = "no Re/Im"; return false; }
+
+        double zoom = 1;
+        if (zoomText != null && !double.TryParse(zoomText, System.Globalization.NumberStyles.Float,
+                                                 System.Globalization.CultureInfo.InvariantCulture, out zoom))
+        {
+            error = "bad zoom";
+            return false;
+        }
+        double scale = Math.Clamp(InitialViewWidth / (Math.Max(zoom, 1e-3) * Math.Max(1, ClientSize.Width)), MinScale, 1);
+        try
+        {
+            int bits = BigFixed.BitsFor(scale);
+            var x = BigFixed.Parse(re, bits);
+            var y = BigFixed.Parse(im, bits);
+            SetAnchor(x, y);
+        }
+        catch (FormatException)
+        {
+            error = "bad number";
+            return false;
+        }
+        _panX = _panY = 0;
+        _scale = scale;
+        RequestRender();
+        error = "";
+        return true;
     }
 
     private void ResetView()
@@ -840,7 +935,7 @@ case Keys.V:
         string text =
             $"Center: {Clip(cx)}, {Clip(cy)}\n" +
             $"Zoom: {Zoom:G4}x   Iterations: {MaxIterations}   {precision}\n" +
-            $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}{(_progressive ? "+Prog" : "")}   {status} ({_lastRenderPixels:N0} px rendered)\n" +
+            $"{EngineText(v)}   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}{(_progressive ? "+Prog" : "")}   {status} ({_lastRenderPixels:N0} px rendered)\n" +
             $"Palette: {ActivePalette.Name}   Mapping: {_mapping}   Density: {_density:0.##}x   Cycling: {(_cycling ? $"{_cycleSpeed:0.##}/s" : "off")}\n" +
             "H: help   P: palettes   I: hide info";
 
@@ -856,6 +951,17 @@ case Keys.V:
         g.PixelOffsetMode = PixelOffsetMode.Half;
         g.DrawImage(strip, new Rectangle(12, stripY, 200, 10));
         g.PixelOffsetMode = PixelOffsetMode.Default;
+    }
+
+    private string EngineText(in Viewport v)
+    {
+        string cpu = $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores";
+        string gpu = _renderer.GpuFailure != null ? $"GPU failed: {_renderer.GpuFailure}"
+            : _renderer.Gpu == null ? $"GPU: {_gpuStatus}"
+            : !_renderer.UseGpu ? "GPU: off (U)"
+            : v.Deep != null && _renderer.LastRenderUsedGpu ? $"GPU: {_renderer.Gpu.Name}"
+            : $"GPU: {_renderer.Gpu.Name} (deep zoom only)";
+        return $"{cpu}   {gpu}";
     }
 
     private void DrawPicker(Graphics g)
@@ -896,7 +1002,7 @@ case Keys.V:
             "  + / -               More / fewer iterations\n" +
             "  R / Home            Reset view\n" +
             "  X                   Deep zoom: auto / always / off\n" +
-            "  Ctrl+C              Copy location (full precision)\n" +
+            "  Ctrl+C / Ctrl+V     Copy / go to location (full precision)\n" +
             "\n" +
             "COLOUR (instant — no recompute)\n" +
             "  P                   Palette picker (hover previews)\n" +
@@ -909,6 +1015,7 @@ case Keys.V:
             "  Ctrl+Wheel or [ ]   Colour density\n" +
             "  M                   Mapping: Linear / Sqrt / Log\n" +
             "  V                   SIMD on/off (compare render times)\n" +
+            "  U                   GPU on/off for deep zoom (DirectX 12)\n" +
             "  B / D               Interior fill on/off / show filled areas\n" +
             "  Q                   Progressive rendering (preview + live fill-in) on/off\n" +
             "\n" +

@@ -262,6 +262,163 @@ Console.WriteLine("\n== 3. Pictures ==");
 }
 
 Console.WriteLine($"\nImages: {outDir}");
+if (args.Length > 1 && args[1] == "gputime")
+{
+    // gputime <x> <y> <scale> [w h]: time the app renderer on GPU vs CPU for one view.
+    var gpu = Fractal.Gpu.GpuDeep.TryCreate(out string why) ?? throw new Exception(why);
+    double s = double.Parse(args[4]);
+    int W = args.Length > 6 ? int.Parse(args[5]) : 1024, H = args.Length > 6 ? int.Parse(args[6]) : 640;
+    int bits = BigFixed.BitsFor(s), mi = MaxIterFor(s, W);
+    var a = new DeepAnchor(BigFixed.Parse(args[2], bits), BigFixed.Parse(args[3], bits));
+    var v = new Viewport(a.X.ToDouble(), a.Y.ToDouble(), s, 0, 0, W, H, mi, a);
+    foreach (bool useGpu in new[] { true, true, false })
+    {
+        var r = new MandelbrotRenderer { Gpu = gpu, UseGpu = useGpu };
+        var f = new Field(v, new float[W * H]);
+        long d0 = gpu.Dispatches; double ms0 = gpu.DispatchMs;
+        var sw = Stopwatch.StartNew();
+        r.Render(f, null, new RenderProgress(), CancellationToken.None);
+        if (useGpu) Console.Write($"[{gpu.Dispatches - d0} dispatches, {gpu.DispatchMs - ms0:0.0} ms in them, {gpu.MsPerIteration:0.00e0} ms/iter] ");
+        Console.WriteLine($"{(r.LastRenderUsedGpu ? "GPU" : "CPU")}: {sw.ElapsedMilliseconds} ms (orbit {r.LastOrbit!.Length} long, {r.LastOrbit.ComputeTime.TotalMilliseconds:0} ms), maxIter {mi}, inside {f.Values.Count(x => x < 0)}, filled {f.Values.Count(x => x == MandelbrotRenderer.FilledInside)}");
+    }
+    return 0;
+}
+
+if (args.Length > 1 && args[1] == "gpu")
+{
+    // GPU (single precision, rescaled) vs CPU (double) perturbation, along an automatic zoom
+    // path that follows the boundary down to 1e-120.
+    var gpu = Fractal.Gpu.GpuDeep.TryCreate(out string why);
+    if (gpu == null) { Console.WriteLine("No GPU: " + why); return 1; }
+    Console.WriteLine($"GPU: {gpu.Name} (self-test passed)");
+
+    const int w = 480, h = 270;
+    double scale = 1e-6;
+    var cx = BigFixed.Parse(SeahorseX, 512);
+    var cy = BigFixed.Parse("0.1318259", 512);
+    bool ok = true;
+    int step = 0;
+    while (scale > 1e-120)
+    {
+        int bits = BigFixed.BitsFor(scale);
+        var anchor = new DeepAnchor(cx.WithBits(bits), cy.WithBits(bits));
+        int maxIter = MaxIterFor(scale, w);
+        var view = new Viewport(anchor.X.ToDouble(), anchor.Y.ToDouble(), scale, 0, 0, w, h, maxIter, anchor);
+        var orbit = ReferenceOrbit.Compute(anchor.X, anchor.Y, maxIter);
+
+        var cpu = new float[w * h];
+        Parallel.For(0, w * h, i =>
+        {
+            int py = i / w, px = i % w;
+            cpu[i] = Perturbation.Iterate(orbit, (view.OriginX + px) * scale, -((view.OriginY + py) * scale), maxIter);
+        });
+        var g = new float[w * h];
+        gpu.Compute(orbit, view, Enumerable.Range(0, w * h).ToArray(), g, null, CancellationToken.None);
+
+        // "Invisible" error: within 1 iteration, or within the spread between this pixel and its
+        // neighbours (in chaotic dust neighbours differ by hundreds; that detail is noise anyway).
+        int close = 0, invisible = 0, insideMismatch = 0;
+        for (int i = 0; i < g.Length; i++)
+        {
+            if ((cpu[i] < 0) != (g[i] < 0)) { insideMismatch++; continue; }
+            float diff = cpu[i] < 0 ? 0 : Math.Abs(cpu[i] - g[i]);
+            if (diff <= 1) { close++; invisible++; continue; }
+            int px = i % w, py = i / w;
+            float spread = 0;
+            foreach (int n in new[] { px > 0 ? i - 1 : i, px < w - 1 ? i + 1 : i, py > 0 ? i - w : i, py < h - 1 ? i + w : i })
+                if (cpu[n] >= 0) spread = Math.Max(spread, Math.Abs(cpu[n] - cpu[i]));
+            if (diff <= spread) invisible++;
+        }
+        double frac = (double)invisible / g.Length;
+        Console.WriteLine($"1e{Math.Log10(scale):0}: maxIter {maxIter,6}, within 1 iter {(double)close / g.Length:P1}, invisible {frac:P2}, inside mismatch {insideMismatch}, inside {cpu.Count(v => v < 0)}");
+        ok &= frac > 0.99;
+        if (step % 4 == 0)
+        {
+            Save(cpu, w, h, Path.Combine(outDir, $"gpu_{step:00}_cpu.png"));
+            Save(g, w, h, Path.Combine(outDir, $"gpu_{step:00}_gpu.png"));
+        }
+
+        // Next centre: the slowest-escaping pixel near the middle (it lies closest to the set's
+        // boundary, so following it keeps the view full of detail).
+        int best = -1;
+        for (int py = h / 4; py < 3 * h / 4; py++)
+            for (int px = w / 4; px < 3 * w / 4; px++)
+            {
+                int i = py * w + px;
+                if (cpu[i] >= 0 && (best < 0 || cpu[i] > cpu[best])) best = i;
+            }
+        if (best < 0) { Console.WriteLine("Lost the boundary"); break; }
+        int nb = BigFixed.BitsFor(scale / 1e5);
+        var sc = BigFixed.FromDouble(scale, nb);
+        cx = cx.WithBits(nb) + BigFixed.FromDouble(view.OriginX + best % w, nb) * sc;
+        cy = cy.WithBits(nb) - BigFixed.FromDouble(view.OriginY + best / w, nb) * sc;
+        scale /= 1e5;
+        step++;
+    }
+    Console.WriteLine($"Path end: {cx.ToDecimalString(130)}, {cy.ToDecimalString(130)}");
+
+    // The app renderer with the GPU: interior fill and pan reuse, on a view with a minibrot
+    // (seahorse 1e-14) so fill has interior to work on.
+    {
+        double s = 1e-14;
+        int W = 1280, H = 720, bits = BigFixed.BitsFor(s), mi = MaxIterFor(s, W);
+        var a = new DeepAnchor(BigFixed.Parse(SeahorseX, bits), BigFixed.Parse(SeahorseY, bits));
+        var v = new Viewport(a.X.ToDouble(), a.Y.ToDouble(), s, 0, 0, W, H, mi, a);
+        float[] R(Viewport vv, bool useGpu, bool fill, Field? src = null)
+        {
+            var r = new MandelbrotRenderer { Gpu = gpu, UseGpu = useGpu, UseInteriorFill = fill };
+            var f = new Field(vv, new float[vv.Width * vv.Height]);
+            var prog = new RenderProgress();
+            r.Render(f, src, prog, CancellationToken.None);
+            if (useGpu && !r.LastRenderUsedGpu) throw new Exception("GPU not used: " + r.GpuFailure);
+            if (prog.Done != prog.Total) Console.WriteLine($"  progress {prog.Done} of {prog.Total}");
+            return f.Values;
+        }
+        int Diff(float[] x, float[] y) => x.Zip(y).Count(p => BitConverter.SingleToInt32Bits(p.First) != BitConverter.SingleToInt32Bits(p.Second));
+        var plain = new float[W * H];
+        gpu.Compute(ReferenceOrbit.Compute(a.X, a.Y, mi), v, Enumerable.Range(0, W * H).ToArray(), plain, null, CancellationToken.None);
+        var noFill = R(v, true, false);
+        var fill = R(v, true, true);
+        var cpuFill = R(v, false, true);
+        int fillChanged = fill.Zip(noFill).Count(p => !(p.First < 0 && p.Second < 0) && p.First != p.Second);
+        var panned = v with { PanX = 137, PanY = -59 };
+        var reused = R(panned, true, true, new Field(v, fill));
+        var fresh = R(panned, true, true);
+        int panDiff = reused.Zip(fresh).Count(p => !(p.First < 0 && p.Second < 0) && p.First != p.Second);
+        Console.WriteLine($"Renderer on GPU: no-fill vs direct {Diff(noFill, plain)}, fill changed {fillChanged} px, " +
+                          $"filled {fill.Count(x => x == MandelbrotRenderer.FilledInside)} px (CPU filled {cpuFill.Count(x => x == MandelbrotRenderer.FilledInside)}), " +
+                          $"pan reuse vs fresh {panDiff}, inside {noFill.Count(x => x < 0)}");
+        ok &= Diff(noFill, plain) == 0 && fillChanged < W * H / 1000 && panDiff < W * H / 1000;
+        Save(fill, W, H, Path.Combine(outDir, "gpu_renderer_fill.png"));
+    }
+
+    // Speed at 4K: the app renderer on the GPU vs on the CPU (both with interior fill).
+    foreach (double s in new[] { 1e-14, 1e-20, 1e-50, 1e-64 })
+    {
+        int W = 3840, H = 2160, bits = BigFixed.BitsFor(s), mi = MaxIterFor(s, W);
+        var a = s > 1e-15 ? new DeepAnchor(BigFixed.Parse(SeahorseX, bits), BigFixed.Parse(SeahorseY, bits))
+                          : new DeepAnchor(cx.WithBits(bits), cy.WithBits(bits));
+        var v = new Viewport(a.X.ToDouble(), a.Y.ToDouble(), s, 0, 0, W, H, mi, a);
+        var r = new MandelbrotRenderer();
+        var f = new Field(v, new float[W * H]);
+        r.Render(f, null, new RenderProgress(), CancellationToken.None); // warm, caches orbit
+        var sw = Stopwatch.StartNew();
+        r.Render(f, null, new RenderProgress(), CancellationToken.None);
+        long cpuMs = sw.ElapsedMilliseconds;
+        r.Gpu = gpu;
+        var gf = new Field(v, new float[W * H]);
+        r.Render(gf, null, new RenderProgress(), CancellationToken.None);
+        sw.Restart();
+        r.Render(gf, null, new RenderProgress(), CancellationToken.None);
+        var gv = gf.Values;
+        Console.WriteLine($"4K 1e{Math.Log10(s):0} (maxIter {mi}): CPU {cpuMs} ms, GPU {sw.ElapsedMilliseconds} ms, inside {gv.Count(x => x < 0) * 100.0 / gv.Length:0}%");
+        Save(gv, W, H, Path.Combine(outDir, $"gpu4k_1e{-Math.Log10(s):0}.png"));
+    }
+    gpu.Dispose();
+    Console.WriteLine(ok ? "GPU CHECKS PASSED" : "GPU CHECKS FAILED");
+    return ok ? 0 : 1;
+}
+
 Console.WriteLine(allPassed ? "\nALL PASSED" : "\nSOME CHECKS FAILED");
 return allPassed ? 0 : 1;
 
