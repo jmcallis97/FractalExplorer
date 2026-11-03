@@ -279,6 +279,7 @@ if (args.Length > 1 && args[1] == "gputime")
         var sw = Stopwatch.StartNew();
         r.Render(f, null, new RenderProgress(), CancellationToken.None);
         if (useGpu) Console.Write($"[{gpu.Dispatches - d0} dispatches, {gpu.DispatchMs - ms0:0.0} ms in them, {gpu.MsPerIteration:0.00e0} ms/iter] ");
+        Save(f.Values, W, H, Path.Combine(outDir, $"gputime_{(r.LastRenderUsedGpu ? "gpu" : "cpu")}.png"));
         Console.WriteLine($"{(r.LastRenderUsedGpu ? "GPU" : "CPU")}: {sw.ElapsedMilliseconds} ms (orbit {r.LastOrbit!.Length} long, {r.LastOrbit.ComputeTime.TotalMilliseconds:0} ms), maxIter {mi}, inside {f.Values.Count(x => x < 0)}, filled {f.Values.Count(x => x == MandelbrotRenderer.FilledInside)}");
     }
     return 0;
