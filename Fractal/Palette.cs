@@ -64,6 +64,19 @@ public sealed class Palette
         return new Palette(name, lut);
     }
 
+    /// <summary>A mix of two palettes, for fading: t = 0 gives a, t = 1 gives b.</summary>
+    public static Palette Blend(Palette a, Palette b, double t)
+    {
+        var lut = new int[Size];
+        for (int i = 0; i < Size; i++)
+        {
+            int p = a.Lut[i], q = b.Lut[i];
+            int Mix(int shift) => (int)(((p >> shift) & 255) * (1 - t) + ((q >> shift) & 255) * t + 0.5);
+            lut[i] = Opaque | (Mix(16) << 16) | (Mix(8) << 8) | Mix(0);
+        }
+        return new Palette($"{a.Name} to {b.Name}", lut);
+    }
+
     public static Palette Random(Random rng, int number)
     {
         string name = $"Random #{number}";

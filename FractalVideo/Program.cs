@@ -63,7 +63,9 @@ int workers = renderer.WorkerCount;
 int holdStart = (int)Math.Round(opt.HoldStart * opt.Fps);
 int zoomFrames = Math.Max(1, (int)Math.Round((zEnd - zStart) * opt.SecondsPerDoubling * opt.Fps));
 int holdEnd = (int)Math.Round(opt.HoldEnd * opt.Fps);
-int totalFrames = holdStart + zoomFrames + 1 + holdEnd;
+int mainFrames = holdStart + zoomFrames + 1 + holdEnd;
+int finaleFrames = (int)Math.Round(opt.FinaleSeconds * opt.Fps);
+int totalFrames = mainFrames + finaleFrames;
 
 Console.WriteLine($"Target: zoom {Math.Pow(2, zEnd):G4} (2^{zEnd:0.0}), max iterations {MaxIterFor(lastKey)}");
 Console.WriteLine($"Video:  {W}x{H} @ {opt.Fps} fps, {totalFrames} frames ({totalFrames / (double)opt.Fps:0.0} s), " +
@@ -71,6 +73,9 @@ Console.WriteLine($"Video:  {W}x{H} @ {opt.Fps} fps, {totalFrames} frames ({tota
 Console.WriteLine($"Keyframes: {lastKey - firstKey + 1} at {KW}x{KH}, on {(gpu != null ? gpu.Name : $"CPU ({gpuWhy})")}");
 Console.WriteLine($"Palette: {palette.Name}, {opt.Mapping}, density {opt.Density}, offset {opt.Offset}");
 Console.WriteLine($"Encoder: {ffmpeg} ({opt.Encoder})\n");
+
+// Keep the machine awake: a long render left alone must not stop when Windows goes to sleep.
+NativeMethods.SetThreadExecutionState(NativeMethods.EsContinuous | NativeMethods.EsSystemRequired);
 
 // ---- Keyframe producer (renders ahead while frames are being composed and encoded) ----------
 
@@ -93,7 +98,8 @@ var producer = Task.Run(() =>
             renderer.Render(field, null, new RenderProgress(), cts.Token);
             var full = new int[KW * KH];
             Colorizer.Colorize(field, palette, opt.Mapping, opt.Density, opt.Offset, full, workers);
-            var key = new Keyframe(k, full, HalfSize(full, KW, KH));
+            // The last two keep their iteration data, so the finale can recolour them.
+            var key = new Keyframe(k, full, HalfSize(full, KW, KH), k >= lastKey - 1 ? field : null);
             renderSeconds += sw.Elapsed.TotalSeconds;
             keyQueue.Add(key, cts.Token);
         }
@@ -138,10 +144,21 @@ Keyframe? GetKey(int k)
     return keys[k];
 }
 
+void Report(int f, string where)
+{
+    if (clock.ElapsedMilliseconds - lastReport < 2000 && f != totalFrames - 1) return;
+    lastReport = clock.ElapsedMilliseconds;
+    double done = (f + 1.0) / totalFrames;
+    double elapsed = clock.Elapsed.TotalSeconds;
+    var eta = TimeSpan.FromSeconds(elapsed / done - elapsed);
+    Console.Write($"\rFrame {f + 1}/{totalFrames} ({done:P0})  {where}  " +
+                  $"elapsed {TimeSpan.FromSeconds(elapsed):hh\\:mm\\:ss}  left ~{eta:hh\\:mm\\:ss}   ");
+}
+
 bool ok = true;
 try
 {
-    for (int f = 0; f < totalFrames; f++)
+    for (int f = 0; f < mainFrames; f++)
     {
         double z = f < holdStart ? zStart
                  : f <= holdStart + zoomFrames ? zStart + (zEnd - zStart) * (f - holdStart) / zoomFrames
@@ -153,15 +170,41 @@ try
         Compose(frame, W, H, a, b, z - k);
         encIn.Write(MemoryMarshal.AsBytes(frame.AsSpan()));
 
-        if (clock.ElapsedMilliseconds - lastReport > 2000 || f == totalFrames - 1)
+        Report(f, $"zoom 2^{z:0.0}  keyframe {k}/{lastKey}");
+    }
+
+    // Finale: the last view held still while random palettes fade from one to the next.
+    if (ok && finaleFrames > 0)
+    {
+        int k = Math.Clamp((int)Math.Floor(zEnd), firstKey, lastKey - 1);
+        var a = GetKey(k)!;
+        var b = GetKey(k + 1)!;
+        var rng = new Random(opt.Seed);
+        int perPalette = Math.Max(1, (int)Math.Round(opt.FinalePaletteSeconds * opt.Fps));
+        int fade = Math.Clamp((int)Math.Round(opt.FinaleFadeSeconds * opt.Fps), 1, perPalette);
+        var from = palette;
+        var to = Palette.Random(rng, 1);
+        int number = 1;
+        for (int i = 0; i < finaleFrames && !cts.IsCancellationRequested; i++)
         {
-            lastReport = clock.ElapsedMilliseconds;
-            double done = (f + 1.0) / totalFrames;
-            double elapsed = clock.Elapsed.TotalSeconds;
-            var eta = TimeSpan.FromSeconds(elapsed / done - elapsed);
-            Console.Write($"\rFrame {f + 1}/{totalFrames} ({done:P0})  zoom 2^{z:0.0}  keyframe {k}/{lastKey}  " +
-                          $"elapsed {TimeSpan.FromSeconds(elapsed):hh\\:mm\\:ss}  left ~{eta:hh\\:mm\\:ss}   ");
+            int phase = i % perPalette;
+            if (i > 0 && phase == 0)
+            {
+                from = to;
+                to = Palette.Random(rng, ++number);
+            }
+            // Fade, then hold. Held frames are identical, so only fades need recomputing.
+            if (phase < fade)
+            {
+                var mixed = Palette.Blend(from, to, SmoothStep((phase + 1.0) / fade));
+                Colorizer.Colorize(a.Values!, mixed, opt.Mapping, opt.Density, opt.Offset, a.Full, workers);
+                Colorizer.Colorize(b.Values!, mixed, opt.Mapping, opt.Density, opt.Offset, b.Full, workers);
+                Compose(frame, W, H, a, b with { Half = HalfSize(b.Full, KW, KH) }, zEnd - k);
+            }
+            encIn.Write(MemoryMarshal.AsBytes(frame.AsSpan()));
+            Report(mainFrames + i, $"finale palette {number}");
         }
+        if (cts.IsCancellationRequested) ok = false;
     }
 }
 catch (IOException ex)
@@ -303,7 +346,15 @@ static Palette? LoadPalette(string name)
     return match;
 }
 
-sealed record Keyframe(int K, int[] Full, int[] Half);
+sealed record Keyframe(int K, int[] Full, int[] Half, Field? Values);
+
+static class NativeMethods
+{
+    public const uint EsContinuous = 0x80000000, EsSystemRequired = 0x00000001;
+
+    [DllImport("kernel32.dll")]
+    public static extern uint SetThreadExecutionState(uint flags);
+}
 
 sealed class Options
 {
@@ -314,6 +365,8 @@ sealed class Options
     public string Palette = "Classic", Preset = "medium", Encoder = "x264";
     public ColorMapping Mapping = ColorMapping.Linear;
     public double Density = 1, Offset = 0;
+    public double FinaleSeconds = 0, FinalePaletteSeconds = 6, FinaleFadeSeconds = 2;
+    public int Seed = Environment.TickCount;
     public string? Ffmpeg;
 
     public static Options? Parse(string[] args)
@@ -332,6 +385,10 @@ sealed class Options
                   --palette Classic    built-in or saved palette name, or a .map file
                   --mapping Linear     Linear | Sqrt | Log
                   --density 1 --offset 0
+                  --finale 120         seconds of random palettes on the last view, after the hold
+                  --finale-palette 6   seconds per palette, including its fade
+                  --finale-fade 2      seconds each fade takes
+                  --seed 1             repeat the same random palettes
                   --encoder x264       x264 (best quality per MB) | nvenc (NVIDIA hardware, faster)
                   --crf 18             quality: lower = better and bigger (x264 ~16-23)
                   --preset medium      x264 speed/size trade-off: faster | fast | medium | slow
@@ -361,6 +418,10 @@ sealed class Options
                 case "--palette": o.Palette = Next(); break;
                 case "--mapping": o.Mapping = Enum.Parse<ColorMapping>(Next(), true); break;
                 case "--density": o.Density = D(); break;
+                case "--finale": o.FinaleSeconds = D(); break;
+                case "--finale-palette": o.FinalePaletteSeconds = D(); break;
+                case "--finale-fade": o.FinaleFadeSeconds = D(); break;
+                case "--seed": o.Seed = int.Parse(Next()); break;
                 case "--offset": o.Offset = D(); break;
                 case "--encoder": o.Encoder = Next().ToLowerInvariant(); break;
                 case "--crf": o.Crf = int.Parse(Next()); break;

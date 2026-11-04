@@ -262,6 +262,57 @@ Console.WriteLine("\n== 3. Pictures ==");
 }
 
 Console.WriteLine($"\nImages: {outDir}");
+if (args.Length > 2 && args[1] == "gpudepth")
+{
+    // gpudepth <location file>: GPU vs CPU along the straight dive to a location.
+    var gpu = Fractal.Gpu.GpuDeep.TryCreate(out string why) ?? throw new Exception(why);
+    if (!Location.TryParse(File.ReadAllText(args[2]), out var loc, out string err)) throw new Exception(err);
+    const int w = 480, h = 270;
+    double endLog = Math.Log10(loc.Zoom);
+    foreach (double frac in new[] { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0 })
+    {
+        double zoom = Math.Pow(10, endLog * frac);
+        double s = Location.ViewWidthAtZoom1 / (zoom * w);
+        int bits = BigFixed.BitsFor(s), mi = (int)(200 + 100 * Math.Log2(zoom));
+        var a = new DeepAnchor(BigFixed.Parse(loc.Re, bits), BigFixed.Parse(loc.Im, bits));
+        var v = new Viewport(a.X.ToDouble(), a.Y.ToDouble(), s, 0, 0, w, h, mi, a);
+        var orbit = ReferenceOrbit.Compute(a.X, a.Y, mi);
+        double minZ = double.MaxValue;
+        for (int i = 1; i < orbit.Length; i++) minZ = Math.Min(minZ, Math.Sqrt(orbit.Zr[i] * orbit.Zr[i] + orbit.Zi[i] * orbit.Zi[i]));
+
+        var sw = Stopwatch.StartNew();
+        var g = new float[w * h];
+        gpu.Compute(orbit, v, Enumerable.Range(0, w * h).ToArray(), g, null, CancellationToken.None);
+        long gpuMs = sw.ElapsedMilliseconds;
+        sw.Restart();
+        var cpu = new float[w * h];
+        Parallel.For(0, w * h, i =>
+            cpu[i] = Perturbation.Iterate(orbit, (v.OriginX + i % w) * s, -((v.OriginY + i / w) * s), mi));
+
+        int invisible = 0, insideMismatch = 0;
+        for (int i = 0; i < g.Length; i++)
+        {
+            if ((cpu[i] < 0) != (g[i] < 0)) { insideMismatch++; continue; }
+            float diff = cpu[i] < 0 ? 0 : Math.Abs(cpu[i] - g[i]);
+            int px = i % w, py = i / w;
+            float spread = 1;
+            foreach (int n in new[] { px > 0 ? i - 1 : i, px < w - 1 ? i + 1 : i, py > 0 ? i - w : i, py < h - 1 ? i + w : i })
+                if (cpu[n] >= 0) spread = Math.Max(spread, Math.Abs(cpu[n] - cpu[i]));
+            if (diff <= spread) invisible++;
+        }
+        var esc = cpu.Where(x => x >= 0).ToArray();
+        Console.WriteLine($"zoom 1e{endLog * frac:0}: maxIter {mi}, orbit {orbit.Length} ({orbit.ComputeTime.TotalMilliseconds:0} ms), min|Z| {minZ:0.0e0}, " +
+                          $"invisible {(double)invisible / g.Length:P2}, inside mismatch {insideMismatch}, inside {cpu.Length - esc.Length}, " +
+                          $"mean iters {(esc.Length > 0 ? esc.Average() : 0):0}, GPU {gpuMs} ms, CPU {sw.ElapsedMilliseconds} ms");
+        if (frac >= 0.9)
+        {
+            Save(cpu, w, h, Path.Combine(outDir, $"depth_{frac * 100:0}_cpu.png"));
+            Save(g, w, h, Path.Combine(outDir, $"depth_{frac * 100:0}_gpu.png"));
+        }
+    }
+    return 0;
+}
+
 if (args.Length > 1 && args[1] == "gputime")
 {
     // gputime <x> <y> <scale> [w h]: time the app renderer on GPU vs CPU for one view.
