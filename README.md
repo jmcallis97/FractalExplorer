@@ -9,9 +9,9 @@ A fast, interactive Mandelbrot set explorer for Windows (C# / .NET 10, WinForms)
 - **Fullscreen** (F11, Alt+Enter, or double-click)
 - **Fast**: multi-threaded (cores − 2), AVX2 SIMD, interior fill (Mariani–Silver), and
   progressive rendering with an instant low-res preview
-- **Deep zoom** to about 10²⁹⁰× using perturbation theory: one reference orbit is computed in
+- **Deep zoom** to about 10²⁸⁷× using perturbation theory: one reference orbit is computed in
   arbitrary precision and every pixel is iterated in fast doubles relative to it (with
-  rebasing to avoid glitches). Switches on automatically past 10¹³× (X key: auto / always /
+  rebasing to avoid glitches). Switches on automatically once pixels are smaller than 10⁻¹³ (about 3×10¹⁰× zoom) (X key: auto / always /
   off). Ctrl+C copies the location in full precision, with the iteration limit, colour mapping
   and density; Ctrl+V goes there.
 - **Snap** (N): finds the exact point the view is circling (the eye of an endless spiral or a

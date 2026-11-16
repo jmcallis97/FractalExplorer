@@ -77,6 +77,7 @@ Console.WriteLine($"Video:  {W}x{H} @ {opt.Fps} fps, {totalFrames} frames ({tota
                   $"{opt.SecondsPerDoubling} s per doubling");
 Console.WriteLine($"Keyframes: {lastKey - firstKey + 1} at {KW}x{KH}, on {(gpu != null ? gpu.Name : $"CPU ({gpuWhy})")}");
 Console.WriteLine($"Palette: {palette.Name}, {opt.Mapping}, density {opt.Density}, offset {opt.Offset}");
+if (finaleFrames > 0) Console.WriteLine($"Finale: {opt.FinaleSeconds} s of random palettes (--seed {opt.Seed} repeats them)");
 Console.WriteLine($"Encoder: {ffmpeg} ({opt.Encoder})\n");
 
 // Keep the machine awake: a long render left alone must not stop when Windows goes to sleep.
@@ -90,10 +91,14 @@ var keyQueue = new BlockingCollection<Keyframe>(boundedCapacity: 2);
 var clock = Stopwatch.StartNew();
 double renderSeconds = 0;
 
+Exception? producerError = null;
 var producer = Task.Run(() =>
 {
     try
     {
+        // One reference orbit, at the deepest keyframe's limit, serves every keyframe.
+        if (lastKey >= firstKey && Location.ViewWidthAtZoom1 / (Math.Pow(2, lastKey) * KW) < DeepThreshold)
+            renderer.GetOrbit(anchor, MaxIterFor(lastKey), cts.Token);
         for (int k = firstKey; k <= lastKey && !cts.IsCancellationRequested; k++)
         {
             var sw = Stopwatch.StartNew();
@@ -110,6 +115,7 @@ var producer = Task.Run(() =>
         }
     }
     catch (OperationCanceledException) { }
+    catch (Exception ex) { producerError = ex; } // reported below; the frames stop where it failed
     finally { keyQueue.CompleteAdding(); }
 });
 
@@ -224,6 +230,11 @@ encIn.Close();
 enc.WaitForExit();
 Console.WriteLine();
 if (errors.Length > 0) Console.Error.WriteLine("ffmpeg: " + errors.ToString().Trim());
+if (producerError != null)
+{
+    ok = false;
+    Console.Error.WriteLine($"Keyframe rendering failed: {producerError}");
+}
 if (!ok || enc.ExitCode != 0)
 {
     Console.Error.WriteLine("Video incomplete.");

@@ -2,8 +2,8 @@ namespace Fractal;
 
 static class Program
 {
-    [STAThread]
     /// <param name="args">Optional: a text file holding a location copied with Ctrl+C.</param>
+    [STAThread]
     static void Main(string[] args)
     {
         ApplicationConfiguration.Initialize();

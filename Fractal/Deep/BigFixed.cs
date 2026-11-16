@@ -43,7 +43,10 @@ public readonly struct BigFixed
         int e = s.IndexOfAny(['e', 'E']);
         if (e >= 0)
         {
-            exp10 = int.Parse(s[(e + 1)..], CultureInfo.InvariantCulture);
+            // Anything past ±1000 is far outside what can be shown, and 10^huge would hang.
+            if (!int.TryParse(s[(e + 1)..], NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out exp10)
+                || Math.Abs(exp10) > 1000)
+                throw new FormatException("exponent out of range");
             s = s[..e];
         }
         bool negative = s.StartsWith('-');
@@ -73,7 +76,7 @@ public readonly struct BigFixed
     public double ToDouble()
     {
         if (Raw.IsZero) return 0;
-        long len = (long)BigInteger.Abs(Raw).GetBitLength();
+        long len = Raw.GetBitLength(); // magnitude bits (one fewer for a negative power of two: harmless)
         int sh = (int)Math.Max(0, len - 63);
         return Math.ScaleB((double)(Raw >> sh), sh - Bits);
     }

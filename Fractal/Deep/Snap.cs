@@ -42,31 +42,32 @@ public static class Snap
         : $"A minibrot of period {r.Period}, about {r.MinibrotSize:G3} across.";
 
     /// <param name="targetBits">Fractional bits of the answer (about 3.32 per decimal digit).</param>
-    public static Result? Find(Location loc, int maxIter, int targetBits, Action<string> log, out string why)
+    public static Result? Find(Location loc, int maxIter, int targetBits, Action<string> log, out string why,
+                               CancellationToken token = default)
     {
         double viewWidth = Location.ViewWidthAtZoom1 / loc.Zoom;
         int inBits = BigFixed.BitsFor(viewWidth / 4096);
         var c0 = new BC(BigFixed.Parse(loc.Re, inBits), BigFixed.Parse(loc.Im, inBits));
 
         // 1. The orbit of the given centre.
-        var orbit = OrbitOf(c0, maxIter, default, out bool escaped);
+        var orbit = OrbitOf(c0, maxIter, token, out bool escaped);
         log(escaped ? $"Orbit escapes after {orbit.Count - 1} iterations."
                     : $"Orbit stays bounded for {maxIter} iterations (inside the set).");
 
         // 2a. Does it settle onto a cycle? (Misiurewicz if repelling, interior if attracting.)
-        foreach (var (m, p) in CycleCandidates(orbit))
+        foreach (var (m, p) in CycleCandidates(orbit, token))
         {
-            double lamLog = 0, lamArg = 0;
-            for (int k = m; k < m + p; k++) { lamLog += Math.Log((2 * orbit[k]).Magnitude); lamArg += (2 * orbit[k]).Phase; }
+            double lamLog = 0;
+            for (int k = m; k < m + p; k++) lamLog += Math.Log((2 * orbit[k]).Magnitude);
             if (lamLog < 0)
             {
                 log($"Orbit is drawn into an attracting cycle of period {p}: the centre is inside a minibrot.");
-                var nuc = SolveNucleus(c0, p, targetBits, viewWidth, log);
+                var nuc = SolveNucleus(c0, p, targetBits, viewWidth, log, token);
                 if (nuc != null) { why = ""; return nuc; }
                 continue;
             }
             log($"Orbit lands on a cycle of period {p} after about {m} steps.");
-            var mis = SolveMisiurewicz(c0, m, p, targetBits, viewWidth, log);
+            var mis = SolveMisiurewicz(c0, m, p, targetBits, viewWidth, log, token);
             if (mis != null && mis.DistanceInViews < 50) { why = ""; return mis; }
         }
 
@@ -78,8 +79,9 @@ public static class Snap
         Result? nearest = null;
         foreach (int p in periods.AsEnumerable().Reverse().Take(4))
         {
+            token.ThrowIfCancellationRequested();
             log($"Trying a minibrot of period {p}...");
-            var nuc = SolveNucleus(c0, p, targetBits, viewWidth, log);
+            var nuc = SolveNucleus(c0, p, targetBits, viewWidth, log, token);
             log(nuc == null ? "  Newton did not settle." : $"  found one {nuc.DistanceInViews:G3} view widths away, size {nuc.MinibrotSize:G3}.");
             if (nuc != null && (nearest == null || nuc.DistanceInViews < nearest.DistanceInViews)) nearest = nuc;
         }
@@ -105,13 +107,13 @@ public static class Snap
 
         // 1. A spiral's eye under the cursor: the orbit lands on a repelling cycle.
         var orbit = OrbitOf(c0, maxIter, token, out _);
-        foreach (var (m, p) in CycleCandidates(orbit).Take(3))
+        foreach (var (m, p) in CycleCandidates(orbit, token).Take(3))
         {
             token.ThrowIfCancellationRequested();
             double lamLog = 0;
             for (int k = m; k < m + p; k++) lamLog += Math.Log((2 * orbit[k]).Magnitude);
             if (lamLog < 0) break; // inside a minibrot: the box search below finds its nucleus
-            var mis = SolveMisiurewicz(c0, m, p, targetBits, viewWidth, log);
+            var mis = SolveMisiurewicz(c0, m, p, targetBits, viewWidth, log, token);
             if (mis != null && mis.DistanceInViews * viewWidth < 2 * boxRadius) { why = ""; return mis; }
         }
 
@@ -122,7 +124,7 @@ public static class Snap
             double r = boxRadius * f;
             int p = BoxPeriod(c0, r, maxIter, inBits, token);
             if (p < 0) continue;
-            var nuc = SolveNucleus(c0, p, targetBits, viewWidth, log);
+            var nuc = SolveNucleus(c0, p, targetBits, viewWidth, log, token);
             if (nuc != null && nuc.DistanceInViews * viewWidth < 2 * r) { why = ""; return nuc; }
         }
         why = "Nothing found under the cursor: zoom in a little, or point at a different part of the structure.";
@@ -200,17 +202,19 @@ public static class Snap
     }
 
     /// <summary>(m, p) where the orbit from step m onwards repeats every p steps, smallest p first.</summary>
-    private static IEnumerable<(int m, int p)> CycleCandidates(List<Complex> orbit)
+    private static IEnumerable<(int m, int p)> CycleCandidates(List<Complex> orbit, CancellationToken token)
     {
-        const double Tol = 1e-9;
+        const double Tol2 = 1e-18; // (1e-9)²
         int n = orbit.Count;
         int pMax = Math.Min(4000, n / 3);
         for (int p = 1; p <= pMax; p++)
         {
+            if ((p & 63) == 0) token.ThrowIfCancellationRequested();
             int need = Math.Max(24, 3 * p), run = 0;
             for (int k = 1; k + p < n; k++)
             {
-                if ((orbit[k + p] - orbit[k]).Magnitude < Tol)
+                var d = orbit[k + p] - orbit[k];
+                if (d.Real * d.Real + d.Imaginary * d.Imaginary < Tol2)
                 {
                     if (++run >= need) { yield return (k - run + 1, p); break; }
                 }
@@ -219,7 +223,8 @@ public static class Snap
         }
     }
 
-    private static Result? SolveMisiurewicz(BC c0, int m, int p, int targetBits, double viewWidth, Action<string> log)
+    private static Result? SolveMisiurewicz(BC c0, int m, int p, int targetBits, double viewWidth, Action<string> log,
+                                            CancellationToken token)
     {
         while (true)
         {
@@ -238,7 +243,7 @@ public static class Snap
                     }
                     return (z - zm, dz - dzm);
                 };
-            }, out int steps);
+            }, token, out int steps);
             if (c == null) return null;
 
             // The orbit must land at step m, not before: if z_{m-1} already repeats, m is too big.
@@ -247,30 +252,36 @@ public static class Snap
 
             double lamLog = 0, lamArg = 0;
             for (int k = m; k < m + p; k++) { lamLog += Math.Log((2 * orb[k]).Magnitude); lamArg += (2 * orb[k]).Phase; }
+            // G = z(m+p) - z(m) is also zero at minibrot nuclei (the orbit hits 0 and repeats);
+            // Newton can land on one of those. A spiral's eye has a repelling cycle.
+            if (!(lamLog > 0) || orb.Skip(1).Take(m + p).Any(z => z.Magnitude < 1e-12)) return null;
             double turn = Math.IEEERemainder(lamArg * 180 / Math.PI, 360);
             return new Result(Kind.Misiurewicz, m, p, c.Value.R, c.Value.I, Distance(c.Value, c0) / viewWidth,
                 Math.Exp(lamLog), turn, 0, steps);
         }
     }
 
-    private static Result? SolveNucleus(BC c0, int p, int targetBits, double viewWidth, Action<string> log)
+    private static Result? SolveNucleus(BC c0, int p, int targetBits, double viewWidth, Action<string> log,
+                                        CancellationToken token)
     {
         var c = Newton(c0, targetBits, log, bits => cc =>
         {
             var z = BC.Zero(bits); var dz = BC.Zero(bits); var one = BC.One(bits);
             for (int k = 1; k <= p; k++) { dz = (z * dz).Twice() + one; z = z.Sq() + cc; }
             return (z, dz);
-        }, out int steps);
+        }, token, out int steps);
         if (c == null) return null;
 
         // Minibrot size estimate (C. Heiland-Allen): l = Π 2z_j, b = Σ 1/Π 2z_j, size = 1/(b l²).
         var orb = Orbit(c.Value, p);
         double lLog = 0; Complex b = Complex.Zero, prod = Complex.One;
+        bool bDone = false;
         for (int j = 1; j < p; j++)
         {
             lLog += Math.Log((2 * orb[j]).Magnitude);
+            if (bDone) continue;
             prod *= 2 * orb[j];
-            if (prod.Magnitude > 1e200) break; // further terms of b are negligible
+            if (prod.Magnitude > 1e200) { bDone = true; continue; } // further terms of b are negligible
             b += 1 / prod;
         }
         double size = p == 1 ? 2.5 : Math.Exp(-(Math.Log(b.Magnitude) + 2 * lLog)); // period 1: the whole set
@@ -282,7 +293,7 @@ public static class Snap
     /// as G' does, so the step is accurate to about the working precision regardless of depth.
     /// </summary>
     private static BC? Newton(BC c0, int targetBits, Action<string> log,
-        Func<int, Func<BC, (BC g, BC dg)>> makeG, out int steps)
+        Func<int, Func<BC, (BC g, BC dg)>> makeG, CancellationToken token, out int steps)
     {
         int bits = targetBits + 64;
         var G = makeG(bits);
@@ -290,6 +301,7 @@ public static class Snap
         var tiny = BigInteger.One << (bits - targetBits);
         for (steps = 1; steps <= 60; steps++)
         {
+            token.ThrowIfCancellationRequested();
             var (g, dg) = G(c);
             var step = g / dg;
             if (step == null) return null;

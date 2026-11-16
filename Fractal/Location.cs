@@ -49,16 +49,17 @@ public sealed record Location(string Re, string Im, double Zoom, int? Iterations
         if (re == null || im == null) { error = "no Re/Im"; return false; }
 
         double zoom = 1;
-        if (zoomText != null && !double.TryParse(zoomText, NumberStyles.Float, CultureInfo.InvariantCulture, out zoom))
+        if (zoomText != null && (!double.TryParse(zoomText, NumberStyles.Float, CultureInfo.InvariantCulture, out zoom)
+                                 || !double.IsFinite(zoom) || zoom <= 0))
         {
             error = "bad zoom";
             return false;
         }
         var inv = CultureInfo.InvariantCulture;
         int? iterations = int.TryParse(iterText, NumberStyles.Integer, inv, out int it) ? it : null;
-        double? density = double.TryParse(densityText, NumberStyles.Float, inv, out double d) && d > 0 ? d : null;
+        double? density = double.TryParse(densityText, NumberStyles.Float, inv, out double d) && double.IsFinite(d) && d > 0 ? d : null;
         ColorMapping? mapping = Enum.TryParse<ColorMapping>(mappingText, true, out var mp) && Enum.IsDefined(mp) ? mp : null;
-        double? snapZoom = double.TryParse(snapText, NumberStyles.Float, inv, out double sz) && sz > 0 ? sz : null;
+        double? snapZoom = double.TryParse(snapText, NumberStyles.Float, inv, out double sz) && double.IsFinite(sz) && sz > 0 ? sz : null;
 
         // Validate the numbers now, so callers can rely on them parsing.
         try

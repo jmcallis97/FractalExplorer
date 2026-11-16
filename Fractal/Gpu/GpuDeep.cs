@@ -58,7 +58,10 @@ public sealed class GpuDeep : IDisposable
             }
 
             var gpu = new GpuDeep(device);
-            if (!gpu.SelfTest(out reason))
+            bool ok;
+            try { ok = gpu.SelfTest(out reason); }
+            catch { gpu.Dispose(); throw; }
+            if (!ok)
             {
                 gpu.Dispose();
                 return null;

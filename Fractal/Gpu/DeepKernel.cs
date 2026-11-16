@@ -88,9 +88,12 @@ internal readonly partial struct DeepKernel(
                 break;
             }
 
-            // Rebase. |dz|² = s²·|w|²; when s² underflows, dz is far too small to matter.
+            // Rebase when |z| < |dz|, tested in units of s (z/s = Z/s + w) so that it still works
+            // when s² underflows. It can only happen when |Z| is within a few powers of 2 of |dz|,
+            // which also keeps Z/s in range. (A Z below the float range is stored as 0 and can't
+            // be tested: a limit of the float reference.)
             float ww = wr * wr + wi * wi;
-            if (m == last || (e > -60 && mag < s * s * ww))
+            if (m == last)
             {
                 wr = zr;
                 wi = zi;
@@ -99,6 +102,27 @@ internal readonly partial struct DeepKernel(
                 zRefR = 0;
                 zRefI = 0;
                 ww = mag;
+            }
+            else
+            {
+                float zmx = Hlsl.Max(Hlsl.Abs(zRefR), Hlsl.Abs(zRefI));
+                int ez = (int)((Hlsl.AsUInt(zmx) >> 23) & 0xFF) - 127;
+                if (ez > -127 && ez < e + 8)
+                {
+                    float f = Pow2(-e - 32);
+                    float ur = zRefR * f * 4294967296f + wr; // Z/s + w, with 2^-e split to stay in range
+                    float ui = zRefI * f * 4294967296f + wi;
+                    float uu = ur * ur + ui * ui;
+                    if (uu < ww)
+                    {
+                        wr = ur;
+                        wi = ui;
+                        m = 0;
+                        zRefR = 0;
+                        zRefI = 0;
+                        ww = uu;
+                    }
+                }
             }
 
             // Keep w near 1 so it neither overflows nor loses precision as dz grows or shrinks.

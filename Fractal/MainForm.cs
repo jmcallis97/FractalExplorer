@@ -96,7 +96,7 @@ public sealed class MainForm : Form
     // N finds the exact point the view is circling (Snap.Find, in the background) and then jumps
     // or "dives" to it: the view centre glides onto the point while the zoom runs at a steady
     // rate, never more than DiveMaxLead ahead of the newest render on screen (layers are drawn
-    // stretched until the render catches up). Renders are never cancelled during a dive; each one
+    // stretched until the render catches up). The dive itself never cancels a render: each one
     // starts when the previous finishes, at whatever the view is by then.
     private sealed record Dive(BigFixed X, BigFixed Y, double TargetScale, double SecondsPerDoubling,
                                double PanX0, double PanY0, double Started);
@@ -240,7 +240,7 @@ public sealed class MainForm : Form
         Invalidate();
     }
 
-/// <summary>Re-renders everything from scratch, e.g. to time a kernel change.</summary>
+    /// <summary>Re-renders everything from scratch, e.g. to time a kernel change.</summary>
     private void ForceFullRender()
     {
         if (!IsHandleCreated) return;
@@ -359,7 +359,8 @@ public sealed class MainForm : Form
         if (ClientSize.Width > 0 && ClientSize.Height > 0)
         {
             var want = CurrentView();
-            if (_field == null || _field.View != want || _forceFull) StartRender(want);
+            bool sameAsFailed = task.IsFaulted && want == target.View;
+            if (!sameAsFailed && (_field == null || _field.View != want || _forceFull)) StartRender(want);
         }
         Invalidate();
     }
@@ -561,6 +562,16 @@ public sealed class MainForm : Form
         }
     }
 
+    protected override void OnMouseCaptureChanged(EventArgs e)
+    {
+        base.OnMouseCaptureChanged(e);
+        if (_dragging && !Capture)
+        {
+            _dragging = false;
+            Cursor = Cursors.Default;
+        }
+    }
+
     protected override void OnMouseLeave(EventArgs e)
     {
         base.OnMouseLeave(e);
@@ -689,7 +700,7 @@ public sealed class MainForm : Form
             case Keys.OemOpenBrackets:
                 ChangeDensity(1 / 1.25);
                 return true;
-case Keys.V:
+            case Keys.V:
                 if (!MandelbrotRenderer.SimdSupported) { ShowToast("SIMD not supported on this CPU"); return true; }
                 _renderer.UseSimd = !_renderer.UseSimd;
                 ShowToast(_renderer.UseSimd ? "SIMD on (AVX2, 8 px/step)" : "SIMD off (scalar)");
@@ -862,12 +873,13 @@ case Keys.V:
         ShowToast(at != null ? "Looking for the minibrot or spiral eye under the cursor... (Esc cancels)"
                              : "Looking for a spiral centre or minibrot... (Esc cancels)", 120);
         Task.Run(() => at != null ? Snap.FindAt(loc, boxRadius, maxIter, SnapBits, cts.Token, out _)
-                                  : Snap.Find(loc, maxIter, SnapBits, _ => { }, out _)).ContinueWith(t => Post(() =>
+                                  : Snap.Find(loc, maxIter, SnapBits, _ => { }, out _, cts.Token)).ContinueWith(t => Post(() =>
         {
-            _snapping = false;
-            if (_snapCts == cts) _snapCts = null;
             cts.Dispose();
-            if (generation != _navigation) return; // cancelled, or the view moved meanwhile
+            if (_snapCts != cts) return; // cancelled (StopDive already cleared the state)
+            _snapCts = null;
+            _snapping = false;
+            if (generation != _navigation) return; // the view moved meanwhile
             if (t.IsFaulted) { ShowToast("Snap failed: " + t.Exception?.GetBaseException().Message, 4); return; }
             if (t.Result is not { } r)
             {
@@ -1012,6 +1024,8 @@ case Keys.V:
         else if (_snapping)
         {
             _snapCts?.Cancel();
+            _snapCts = null;
+            _snapping = false;
             ShowToast("Snap cancelled");
         }
     }
@@ -1283,7 +1297,9 @@ case Keys.V:
             "  Shift+Wheel         Rotate palette by hand\n" +
             "  Ctrl+Wheel or [ ]   Colour density\n" +
             "  M                   Mapping: Linear / Sqrt / Log\n" +
-            "  V                   SIMD on/off (compare render times)\n" +
+            "\n" +
+            "ENGINE (re-renders)\n" +
+            "  V                  SIMD on/off (compare render times)\n" +
             "  U                   GPU on/off for deep zoom (DirectX 12)\n" +
             "  B / D               Interior fill on/off / show filled areas\n" +
             "  Q                   Progressive rendering (preview + live fill-in) on/off\n" +
@@ -1318,7 +1334,9 @@ case Keys.V:
     protected override void OnFormClosed(FormClosedEventArgs e)
     {
         _timer.Stop();
+        _timer.Dispose();
         _runningCts?.Cancel();
+        _snapCts?.Cancel();
         _baseLayer.Dispose();
         _previewLayer.Dispose();
         _partialLayer.Dispose();

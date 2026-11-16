@@ -85,11 +85,18 @@ public sealed class MandelbrotRenderer
     /// <summary>Reference orbit used by the most recent deep render (for the info display).</summary>
     public ReferenceOrbit? LastOrbit { get; private set; }
 
-    private ReferenceOrbit GetOrbit(DeepAnchor anchor, int maxIterations, CancellationToken token)
+    /// <summary>
+    /// The reference orbit for this anchor, computed if the cached one won't do. A cached orbit
+    /// computed with a higher limit serves too (as does one that escaped): a pixel's position in
+    /// the reference never passes its own iteration count, so the extra length is never reached
+    /// and results are identical. Calling this up front with the highest limit a series of
+    /// renders will use (as FractalVideo does) computes the orbit once for all of them.
+    /// </summary>
+    public ReferenceOrbit GetOrbit(DeepAnchor anchor, int maxIterations, CancellationToken token = default)
     {
         lock (_orbitLock)
         {
-            if (_orbit != null && anchor.Equals(_orbitAnchor) && _orbitMaxIterations == maxIterations)
+            if (_orbit != null && anchor.Equals(_orbitAnchor) && (_orbitMaxIterations >= maxIterations || _orbit.Escaped))
                 return _orbit;
         }
         var orbit = ReferenceOrbit.Compute(anchor.X, anchor.Y, maxIterations, token: token);
@@ -191,6 +198,7 @@ public sealed class MandelbrotRenderer
                 // CPU finish this render (it only computes pixels that are still unknown).
                 Gpu = null;
                 GpuFailure = ex.Message;
+                try { gpu.Dispose(); } catch (Exception) { /* the device may already be gone */ }
             }
         }
 

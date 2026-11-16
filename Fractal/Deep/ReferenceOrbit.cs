@@ -30,13 +30,14 @@ public sealed class ReferenceOrbit
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         int bits = cr.Bits;
-        var zr = new double[maxIterations + 1];
-        var zi = new double[maxIterations + 1];
+        // Grown as needed: most references escape long before a big limit.
+        int cap = Math.Min(maxIterations + 1, 1 << 16);
+        var zr = new double[cap];
+        var zi = new double[cap];
 
         var x = BigFixed.Zero(bits);
         var y = BigFixed.Zero(bits);
         var x2 = x; var y2 = y;
-        var limit = BigFixed.FromDouble(bailout, bits);
         int n = 1;
         bool escaped = false;
 
@@ -47,10 +48,17 @@ public sealed class ReferenceOrbit
             x = x2 - y2 + cr;
             x2 = x * x;
             y2 = y * y;
-            zr[n] = x.ToDouble();
-            zi[n] = y.ToDouble();
+            if (n == zr.Length)
+            {
+                int grown = (int)Math.Min(maxIterations + 1L, 2L * zr.Length);
+                Array.Resize(ref zr, grown);
+                Array.Resize(ref zi, grown);
+            }
+            double dr = x.ToDouble(), di = y.ToDouble();
+            zr[n] = dr;
+            zi[n] = di;
             n++;
-            if ((x2 + y2).Raw > limit.Raw) { escaped = true; break; }
+            if (dr * dr + di * di > bailout) { escaped = true; break; }
         }
         return new ReferenceOrbit(cr, ci, zr, zi, n, escaped, sw.Elapsed);
     }
