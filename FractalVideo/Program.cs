@@ -17,6 +17,8 @@ using Fractal;
 using Fractal.Deep;
 using Fractal.Gpu;
 
+if (args.Length > 0 && args[0] == "--snap") return SnapCommand.Run(args[1..]);
+
 var opt = Options.Parse(args);
 if (opt == null) return 1;
 
@@ -393,6 +395,9 @@ sealed class Options
                   --crf 18             quality: lower = better and bigger (x264 ~16-23)
                   --preset medium      x264 speed/size trade-off: faster | fast | medium | slow
                   --ffmpeg <path>      if ffmpeg isn't on PATH
+
+                       FractalVideo --snap <location.txt>
+                  finds the exact centre of an endless spiral or minibrot, to dive to any depth
                 """);
             return null;
         }

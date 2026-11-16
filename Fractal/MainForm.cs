@@ -38,6 +38,15 @@ public sealed class MainForm : Form
     private DeepMode _deepMode = DeepMode.Auto;
     private int _iterationBoost;
 
+    // Auto iterations: after each render, if a noticeable number of pixels only escaped near the
+    // limit, others were probably cut off by it (painted as "inside" while really escaping later,
+    // which happens a lot near cusps such as -0.75 and +0.25). Then the limit is doubled and the
+    // view rendered again, until the detail stops changing or a render gets too slow.
+    private const int IterationStep = 1000;
+    private const int AutoIterationCap = 1 << 24;
+    private const double AutoIterationMaxSeconds = 20;
+    private bool _autoIterations; // off by default; A toggles
+
     // ---- Render pipeline -------------------------------------------------
     // At most one render runs at a time. If the view changes meanwhile, the next render starts
     // when this one finishes (pans) or the current one is cancelled (zoom/iteration changes,
@@ -308,6 +317,7 @@ public sealed class MainForm : Form
             _previewLayer.Field = null;
             _partialLayer.Field = null;
             Recolor();
+            if (_autoIterations) MaybeRaiseIterations(target);
         }
         else
         {
@@ -324,6 +334,33 @@ public sealed class MainForm : Form
             if (_field == null || _field.View != want || _forceFull) StartRender(want);
         }
         Invalidate();
+    }
+
+    /// <summary>
+    /// Doubles the iteration limit when the finished render shows signs of being cut off by it:
+    /// some pixels inside, and at least 0.5% of them escaping in the top fifth of the limit.
+    /// Only changes the limit; the caller starts the new render (OnRenderFinished's "chase"
+    /// step does, and must be the only one, or two renders would run at once).
+    /// </summary>
+    private bool MaybeRaiseIterations(Field field)
+    {
+        int limit = field.View.MaxIterations;
+        if (limit != MaxIterations || limit >= AutoIterationCap) return false;
+        // Don't start a render that will take too long: doubling the limit roughly doubles the
+        // time of a full render at this window size (measured on the last full render).
+        double nextMs = 2 * _msPerMegapixel * field.View.Width * (double)field.View.Height / 1e6;
+        if (nextMs > AutoIterationMaxSeconds * 1000) return false;
+        float high = 0.8f * limit;
+        int inside = 0, nearLimit = 0;
+        foreach (float v in field.Values)
+        {
+            if (v < 0) inside++;
+            else if (v > high) nearLimit++;
+        }
+        if (inside == 0 || nearLimit < Math.Max(16, field.Values.Length / 200)) return false;
+        _iterationBoost += Math.Min(limit, AutoIterationCap - limit);
+        ShowToast($"Iterations raised to {MaxIterations:N0} (detail was cut off; A turns this off)");
+        return true;
     }
 
     /// <summary>Re-applies the palette to every visible layer. No fractal maths involved.</summary>
@@ -520,6 +557,12 @@ public sealed class MainForm : Form
                 else if (_fullScreen) ToggleFullScreen();
                 Invalidate();
                 return true;
+            case Keys.A:
+                _autoIterations = !_autoIterations;
+                ShowToast(_autoIterations ? "Auto iterations on" : "Auto iterations off");
+                if (_autoIterations && _running == null && _field != null && MaybeRaiseIterations(_field))
+                    RequestRender();
+                return true;
             case Keys.I:
                 _showInfo = !_showInfo;
                 Invalidate();
@@ -546,14 +589,17 @@ public sealed class MainForm : Form
             case Keys.Oemplus:
             case Keys.Add:
             case Keys.Shift | Keys.Oemplus:
-                _iterationBoost += 100;
+                _iterationBoost += IterationStep;
                 ShowToast($"Iterations: {MaxIterations}");
                 RequestRender();
                 return true;
             case Keys.OemMinus:
             case Keys.Subtract:
-                _iterationBoost -= 100;
-                ShowToast($"Iterations: {MaxIterations}");
+                _iterationBoost = Math.Max(_iterationBoost - IterationStep, 50 - (MaxIterations - _iterationBoost));
+                // Lowering by hand means "I want fewer": don't let auto push it straight back up.
+                bool wasAuto = _autoIterations;
+                _autoIterations = false;
+                ShowToast($"Iterations: {MaxIterations}" + (wasAuto ? "  (auto iterations off; A turns it on)" : ""));
                 RequestRender();
                 return true;
 
@@ -714,6 +760,11 @@ case Keys.V:
         SetAnchor(BigFixed.Parse(loc.Re, bits), BigFixed.Parse(loc.Im, bits));
         _panX = _panY = 0;
         _scale = scale;
+        if (loc.Iterations is int it)
+        {
+            _iterationBoost = 0;
+            _iterationBoost = it - MaxIterations; // the limit that was in use when it was copied
+        }
         RequestRender();
         error = "";
         return true;
@@ -964,7 +1015,8 @@ case Keys.V:
             "  Left-drag           Pan (only new edges are computed)\n" +
             "  Arrows / Shift      Pan a step / a big step\n" +
             "  Middle-click        Center on point\n" +
-            "  + / -               More / fewer iterations\n" +
+            "  + / -               1000 more / fewer iterations\n" +
+            "  A                   Auto iterations on/off (raises the limit when detail is cut off)\n" +
             "  R / Home            Reset view\n" +
             "  X                   Deep zoom: auto / always / off\n" +
             "  Ctrl+C / Ctrl+V     Copy / go to location (full precision)\n" +

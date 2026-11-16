@@ -40,6 +40,12 @@ there is one) and builds every frame from the two nearest keyframes, so frames a
 anti-aliased and only a few hundred fractal renders are needed. Requires ffmpeg
 (`winget install Gyan.FFmpeg`). Run it without arguments to see the options.
 
+`FractalVideo --snap location.txt` finds the exact point a view is centred on, to ~320 digits:
+the eye of an endless spiral (a Misiurewicz point: the orbit lands on a repelling cycle) or a
+minibrot's nucleus. It reads the pattern off the orbit of the current centre, then solves for
+the point with Newton's method, and writes `location.snapped.txt` (zoom 1e285 for a spiral,
+framing the minibrot otherwise), ready for a dive to the limit of the deep-zoom maths.
+
 ## Test bench
 
 `PerturbationLab` is a console test bench for the deep zoom maths: it checks perturbation
