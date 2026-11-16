@@ -26,7 +26,7 @@ public sealed class ReferenceOrbit
     }
 
     public static ReferenceOrbit Compute(BigFixed cr, BigFixed ci, int maxIterations,
-                                         double bailout = 256, CancellationToken token = default)
+                                         double bailout = Mandelbrot.Bailout, CancellationToken token = default)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         int bits = cr.Bits;

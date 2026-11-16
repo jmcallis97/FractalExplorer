@@ -33,6 +33,15 @@ Open `Fractal.sln` in Rider or Visual Studio, or run:
 dotnet run --project Fractal
 ```
 
+The solution has four projects:
+
+| Project | What it is |
+| --- | --- |
+| `Fractal.Core` | The engine, with no UI: plain and deep-zoom rendering on CPU and GPU, snap, locations, palettes and colouring. `Mandelbrot.cs` holds the rules every program shares (bailout, zoom range, deep-zoom switch-over, iteration limit). |
+| `Fractal` | The WinForms explorer. `MainForm` ties together `ViewState`, `RenderPipeline`, `ColourState`, `DiveController` and `Overlay`. |
+| `FractalVideo` | Zoom videos (below). |
+| `PerturbationLab` | Test bench (below). |
+
 ## Zoom videos
 
 `FractalVideo` renders a straight dive into a location: press Ctrl+C in the app, paste into a

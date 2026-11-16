@@ -6,16 +6,10 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- Optimize even in Debug: unoptimized JIT makes the renderer 3-5x slower and erases most
-         of the SIMD gain (Vector256 operators don't get inlined). Stepping through code is a bit
-         less precise as a result; set to false temporarily if you need exact debugging. -->
-    <Optimize>true</Optimize>
-    <!-- Pointers for AVX2 gathers from the reference orbit in the deep zoom kernel. -->
-    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="ComputeSharp" Version="3.2.0" />
+    <ProjectReference Include="..\Fractal.Core\Fractal.Core.csproj" />
   </ItemGroup>
 
 </Project>

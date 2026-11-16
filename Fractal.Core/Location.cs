@@ -4,7 +4,7 @@ namespace Fractal;
 
 /// <summary>
 /// A place in the set, as copied with Ctrl+C: centre in full precision (decimal text), zoom
-/// (relative to the whole set being 3.5 wide, so framing is the same at any window size), and
+/// (relative to <see cref="Mandelbrot.ViewWidthAtZoom1"/>, so framing is the same at any window size), and
 /// optionally the iteration limit and colouring that were in use. A "Snap" line asks the app to
 /// find the exact spiral centre or minibrot near the location and zoom in to it ("Snap: 1e100"
 /// gives the zoom to stop at).
@@ -13,9 +13,6 @@ public sealed record Location(string Re, string Im, double Zoom, int? Iterations
                               double? Density = null, ColorMapping? Mapping = null,
                               bool Snap = false, double? SnapZoom = null)
 {
-    /// <summary>Width of the complex plane shown at zoom 1.</summary>
-    public const double ViewWidthAtZoom1 = 3.5;
-
     /// <summary>
     /// Parses the Ctrl+C format ("Re: ...", "Im: ...", "Zoom: ...", "Iterations: ..." lines),
     /// or plain "re im [zoom]".
@@ -73,7 +70,7 @@ public sealed record Location(string Re, string Im, double Zoom, int? Iterations
             return false;
         }
 
-        location = new Location(re, im, Math.Max(zoom, 1e-3), iterations, density, mapping, snap, snapZoom);
+        location = new Location(re, im, Math.Max(zoom, Mandelbrot.MinZoom), iterations, density, mapping, snap, snapZoom);
         error = "";
         return true;
     }

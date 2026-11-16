@@ -272,8 +272,8 @@ if (args.Length > 2 && args[1] == "gpudepth")
     foreach (double frac in new[] { 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 1.0 })
     {
         double zoom = Math.Pow(10, endLog * frac);
-        double s = Location.ViewWidthAtZoom1 / (zoom * w);
-        int bits = BigFixed.BitsFor(s), mi = (int)(200 + 100 * Math.Log2(zoom));
+        double s = Mandelbrot.ScaleFor(zoom, w);
+        int bits = BigFixed.BitsFor(s), mi = Mandelbrot.AutoIterations(zoom);
         var a = new DeepAnchor(BigFixed.Parse(loc.Re, bits), BigFixed.Parse(loc.Im, bits));
         var v = new Viewport(a.X.ToDouble(), a.Y.ToDouble(), s, 0, 0, w, h, mi, a);
         var orbit = ReferenceOrbit.Compute(a.X, a.Y, mi);
@@ -478,8 +478,7 @@ return allPassed ? 0 : 1;
 
 static int MaxIterFor(double scale, int width)
 {
-    double zoom = 3.5 / width / scale; // same rule as the app
-    return (int)(200 + 100 * Math.Log2(Math.Max(1, zoom)));
+    return Mandelbrot.AutoIterations(Mandelbrot.ZoomFor(scale, width)); // same rule as the app
 }
 
 static float[] Deep(string x, string y, double scale, int w, int h, int maxIter, out string info)
@@ -500,7 +499,7 @@ static float BruteForce(BigFixed cr, BigFixed ci, int maxIter)
 {
     int bits = cr.Bits;
     var x = BigFixed.Zero(bits); var y = x; var x2 = x; var y2 = x;
-    var limit = BigFixed.FromDouble(256, bits).Raw;
+    var limit = BigFixed.FromDouble(Mandelbrot.Bailout, bits).Raw;
     for (int i = 0; i < maxIter; i++)
     {
         y = (x * y).Twice() + ci;

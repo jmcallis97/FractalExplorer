@@ -33,7 +33,7 @@ public static class Snap
 
     /// <summary>Zoom to stop at: as deep as the maths goes for a spiral, framing the minibrot otherwise.</summary>
     public static double SuggestedZoom(Result r) =>
-        r.Kind == Kind.Misiurewicz ? 1e285 : Location.ViewWidthAtZoom1 / (r.MinibrotSize * 6);
+        r.Kind == Kind.Misiurewicz ? 1e285 : Mandelbrot.ViewWidthAtZoom1 / (r.MinibrotSize * 6);
 
     /// <summary>One or two lines saying what was found.</summary>
     public static string Describe(Result r) => r.Kind == Kind.Misiurewicz
@@ -45,7 +45,7 @@ public static class Snap
     public static Result? Find(Location loc, int maxIter, int targetBits, Action<string> log, out string why,
                                CancellationToken token = default)
     {
-        double viewWidth = Location.ViewWidthAtZoom1 / loc.Zoom;
+        double viewWidth = Mandelbrot.ViewWidthAtZoom1 / loc.Zoom;
         int inBits = BigFixed.BitsFor(viewWidth / 4096);
         var c0 = new BC(BigFixed.Parse(loc.Re, inBits), BigFixed.Parse(loc.Im, inBits));
 
@@ -100,7 +100,7 @@ public static class Snap
     public static Result? FindAt(Location loc, double boxRadius, int maxIter, int targetBits,
                                  CancellationToken token, out string why)
     {
-        double viewWidth = Location.ViewWidthAtZoom1 / loc.Zoom;
+        double viewWidth = Mandelbrot.ViewWidthAtZoom1 / loc.Zoom;
         int inBits = BigFixed.BitsFor(boxRadius / 4096);
         var c0 = new BC(BigFixed.Parse(loc.Re, inBits), BigFixed.Parse(loc.Im, inBits));
         Action<string> log = _ => { };

@@ -20,7 +20,7 @@ public sealed class MandelbrotRenderer
     /// <summary>Pixel is inside the set, inferred by interior fill rather than iterated.</summary>
     public const float FilledInside = -2f;
 
-    private const double Bailout = 256.0; // large bailout gives smoother colouring
+    private const double Bailout = Mandelbrot.Bailout;
     private static readonly double Ln2 = Math.Log(2.0);
 
     /// <summary>Work unit handed to threads; aligned to the global pixel grid.</summary>

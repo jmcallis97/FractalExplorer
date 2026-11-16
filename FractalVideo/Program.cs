@@ -48,18 +48,16 @@ double zEnd = Math.Log2(opt.EndZoom ?? loc.Zoom);
 int lastKey = (int)Math.Floor(zEnd) + 1;           // keyframes 0..lastKey (zoom 2^k)
 int firstKey = Math.Max(0, (int)Math.Floor(zStart));
 
-// Iteration limit: the app's rule (grows 100 per doubling), shifted so the final frame gets
+// Iteration limit: the app's rule (grows with each doubling), shifted so the final frame gets
 // the limit that was in use when the location was copied.
-const int BaseIterations = 200;
-int boost = loc.Iterations is int li ? li - (int)(BaseIterations + 100 * zEnd) : 0;
-int MaxIterFor(int k) => Math.Max(50, BaseIterations + 100 * k + boost);
+int boost = loc.Iterations is int li ? li - Mandelbrot.AutoIterations(Math.Pow(2, zEnd)) : 0;
+int MaxIterFor(int k) => Mandelbrot.Iterations(Math.Pow(2, k), boost);
 
 // All deep keyframes share one anchor (the target, at the precision the deepest one needs).
-double deepestScale = Location.ViewWidthAtZoom1 / (Math.Pow(2, lastKey) * KW);
+double deepestScale = Mandelbrot.ScaleFor(Math.Pow(2, lastKey), KW);
 int bits = BigFixed.BitsFor(deepestScale);
 var anchor = new DeepAnchor(BigFixed.Parse(loc.Re, bits), BigFixed.Parse(loc.Im, bits));
 double ax = anchor.X.ToDouble(), ay = anchor.Y.ToDouble();
-const double DeepThreshold = 1e-13; // same switch-over as the app
 
 var gpu = GpuDeep.TryCreate(out string gpuWhy);
 var renderer = new MandelbrotRenderer { Gpu = gpu };
@@ -97,13 +95,13 @@ var producer = Task.Run(() =>
     try
     {
         // One reference orbit, at the deepest keyframe's limit, serves every keyframe.
-        if (lastKey >= firstKey && Location.ViewWidthAtZoom1 / (Math.Pow(2, lastKey) * KW) < DeepThreshold)
+        if (lastKey >= firstKey && deepestScale < Mandelbrot.DeepThreshold)
             renderer.GetOrbit(anchor, MaxIterFor(lastKey), cts.Token);
         for (int k = firstKey; k <= lastKey && !cts.IsCancellationRequested; k++)
         {
             var sw = Stopwatch.StartNew();
-            double scale = Location.ViewWidthAtZoom1 / (Math.Pow(2, k) * KW);
-            var view = new Viewport(ax, ay, scale, 0, 0, KW, KH, MaxIterFor(k), scale < DeepThreshold ? anchor : null);
+            double scale = Mandelbrot.ScaleFor(Math.Pow(2, k), KW);
+            var view = new Viewport(ax, ay, scale, 0, 0, KW, KH, MaxIterFor(k), scale < Mandelbrot.DeepThreshold ? anchor : null);
             var field = new Field(view, new float[KW * KH]);
             renderer.Render(field, null, new RenderProgress(), cts.Token);
             var full = new int[KW * KH];

@@ -81,7 +81,7 @@ internal readonly partial struct DeepKernel(
             float zr = zRefR + s * wr;
             float zi = zRefI + s * wi;
             float mag = zr * zr + zi * zi;
-            if (mag > 256f)
+            if (mag > 256f) // Mandelbrot.Bailout
             {
                 float nu = Hlsl.Log2(Hlsl.Log2(mag) * 0.5f);
                 result = Hlsl.Max(0f, (float)i + 2f - nu);

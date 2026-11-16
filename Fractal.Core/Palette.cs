@@ -1,4 +1,3 @@
-using System.Drawing.Imaging;
 using System.Globalization;
 
 namespace Fractal;
@@ -138,17 +137,11 @@ public sealed class Palette
         }
     }
 
-    /// <summary>A width×1 strip of the palette, rotated by <paramref name="offset"/> cycles.</summary>
-    public Bitmap CreateStrip(int width, double offset = 0)
+    /// <summary>The colour (opaque ARGB) at <paramref name="t"/> cycles round the palette (wraps).</summary>
+    public int ColorAt(double t)
     {
-        var bmp = new Bitmap(width, 1, PixelFormat.Format32bppArgb);
-        for (int x = 0; x < width; x++)
-        {
-            double t = (double)x / width + offset;
-            t -= Math.Floor(t);
-            bmp.SetPixel(x, 0, Color.FromArgb(Lut[Math.Min(Size - 1, (int)(t * Size))]));
-        }
-        return bmp;
+        t -= Math.Floor(t);
+        return Lut[Math.Min(Size - 1, (int)(t * Size))];
     }
 
     // ---- Built-ins -------------------------------------------------------

@@ -22,7 +22,7 @@ public sealed record DeepView(BigFixed CenterX, BigFixed CenterY, double Scale, 
 /// </summary>
 public static class Perturbation
 {
-    private const double Bailout = 256.0;
+    private const double Bailout = Mandelbrot.Bailout;
 
     public static float Iterate(ReferenceOrbit orbit, double dcr, double dci, int maxIterations)
     {
