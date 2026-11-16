@@ -156,6 +156,8 @@ internal sealed class Overlay(ColourState colours) : IDisposable
         "  N / Shift+N         Snap: find the spiral centre or minibrot here (ask / zoom straight in)\n" +
         "  Ctrl+click          Snap at the cursor: works on any structure (Ctrl+Shift+click zooms straight in)\n" +
         "  Esc                 Stop a snap zoom\n" +
+        "  L                   Places you've been (click one to go back; kept between sessions)\n" +
+        "  Backspace           Back to the last place\n" +
         "\n" +
         "COLOUR (instant — no recompute)\n" +
         "  P                   Palette picker (hover previews)\n" +

@@ -107,10 +107,16 @@ public sealed class Palette
     }
 
     /// <summary>Loads a Fractint-style .map file (one "r g b" triple per line).</summary>
-    public static Palette? FromMapFile(string path)
+    public static Palette? FromMapFile(string path) =>
+        FromMapLines(Path.GetFileNameWithoutExtension(path), File.ReadLines(path));
+
+    /// <summary>A palette from .map text (as written by <see cref="ToMapText"/>), or null if it has fewer than 2 colours.</summary>
+    public static Palette? FromMapText(string name, string text) => FromMapLines(name, text.Split('\n'));
+
+    private static Palette? FromMapLines(string name, IEnumerable<string> lines)
     {
         var colors = new List<int>();
-        foreach (var line in File.ReadLines(path))
+        foreach (var line in lines)
         {
             var parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length >= 3 &&
@@ -123,18 +129,22 @@ public sealed class Palette
         }
         if (colors.Count < 2) return null;
         var stops = colors.Select((c, i) => ((double)i / colors.Count, c)).ToArray();
-        return FromStops(Path.GetFileNameWithoutExtension(path), stops);
+        return FromStops(name, stops);
     }
 
     /// <summary>Saves as a 256-entry Fractint-style .map file.</summary>
-    public void SaveMapFile(string path)
+    public void SaveMapFile(string path) => File.WriteAllText(path, ToMapText());
+
+    /// <summary>The palette as 256 "r g b" lines (Fractint .map format).</summary>
+    public string ToMapText()
     {
-        using var w = new StreamWriter(path);
+        var sb = new System.Text.StringBuilder(256 * 12);
         for (int i = 0; i < 256; i++)
         {
             int c = Lut[i * Size / 256];
-            w.WriteLine($"{(c >> 16) & 0xFF} {(c >> 8) & 0xFF} {c & 0xFF}");
+            sb.Append((c >> 16) & 0xFF).Append(' ').Append((c >> 8) & 0xFF).Append(' ').Append(c & 0xFF).Append('\n');
         }
+        return sb.ToString();
     }
 
     /// <summary>The colour (opaque ARGB) at <paramref name="t"/> cycles round the palette (wraps).</summary>

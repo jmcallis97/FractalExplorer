@@ -11,6 +11,7 @@ internal sealed class ColourState
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Fractal", "Palettes");
 
     private readonly List<Palette> _palettes = Palette.BuiltIns();
+    private readonly HashSet<Palette> _generated = []; // made with G (or restored from a place): not on disk
     private readonly Random _rng = new();
     private int _randomCount;
 
@@ -21,6 +22,12 @@ internal sealed class ColourState
     public int HoverIndex { get; set; } = -1;
 
     public Palette Active => _palettes[HoverIndex >= 0 ? HoverIndex : PaletteIndex];
+
+    /// <summary>The chosen palette (ignoring a hover preview).</summary>
+    public Palette Selected => _palettes[PaletteIndex];
+
+    /// <summary>True for a palette that exists only in this session (generated, not saved).</summary>
+    public bool IsGenerated(Palette p) => _generated.Contains(p);
 
     public ColorMapping Mapping { get; set; } = ColorMapping.Linear;
     public double Density { get; private set; } = 1.0;
@@ -41,12 +48,40 @@ internal sealed class ColourState
     /// <summary>Adds a new random palette and selects it.</summary>
     public Palette AddRandom()
     {
-        _palettes.Add(Palette.Random(_rng, ++_randomCount));
+        var p = Palette.Random(_rng, ++_randomCount);
+        _palettes.Add(p);
+        _generated.Add(p);
         Select(_palettes.Count - 1);
-        return _palettes[^1];
+        return p;
+    }
+
+    /// <summary>
+    /// Selects a palette by name, or (with <paramref name="map"/>, for one that was generated)
+    /// by its colours, adding it to the list if it isn't there. False if not found.
+    /// </summary>
+    public bool Restore(string name, string? map)
+    {
+        int i = map != null
+            ? _palettes.FindIndex(p => p.ToMapText() == map)
+            : _palettes.FindIndex(p => p.Name == name && !_generated.Contains(p));
+        if (i < 0 && map != null && Palette.FromMapText(name, map) is { } restored)
+        {
+            _palettes.Add(restored);
+            _generated.Add(restored);
+            i = _palettes.Count - 1;
+        }
+        if (i < 0) return false;
+        Select(i);
+        return true;
     }
 
     public void SetDensity(double density) => Density = Math.Clamp(density, 0.01, 100);
+
+    public void SetOffset(double cycles)
+    {
+        Offset = 0;
+        Rotate(cycles);
+    }
 
     public void Rotate(double cycles)
     {

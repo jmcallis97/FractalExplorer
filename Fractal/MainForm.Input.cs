@@ -36,6 +36,7 @@ public sealed partial class MainForm
         if ((ModifierKeys & Keys.Shift) != 0)
         {
             _colours.Rotate(0.02 * notches);
+            TouchPlace();
             Recolor();
             return;
         }
@@ -229,6 +230,12 @@ public sealed partial class MainForm
             case Keys.N:
                 StartSnap(ask: true);
                 return true;
+            case Keys.L:
+                ShowPlaces();
+                return true;
+            case Keys.Back:
+                GoBack();
+                return true;
             case Keys.Shift | Keys.N:
                 StartSnap(ask: false);
                 return true;
@@ -251,6 +258,7 @@ public sealed partial class MainForm
                 return true;
             case Keys.G:
                 var random = _colours.AddRandom();
+                TouchPlace();
                 ShowToast($"Palette: {random.Name} — S to save it");
                 Recolor();
                 return true;
@@ -259,6 +267,7 @@ public sealed partial class MainForm
                 return true;
             case Keys.C:
                 _colours.Cycling = !_colours.Cycling;
+                TouchPlace();
                 ShowToast(_colours.Cycling ? "Colour cycling on" : "Colour cycling off");
                 return true;
             case Keys.Shift | Keys.C:
@@ -281,6 +290,7 @@ public sealed partial class MainForm
                 return true;
             case Keys.M:
                 _colours.NextMapping();
+                TouchPlace();
                 ShowToast($"Colour mapping: {_colours.Mapping}");
                 Recolor();
                 return true;
@@ -333,6 +343,7 @@ public sealed partial class MainForm
     private void SelectPalette(int index)
     {
         _colours.Select(index);
+        TouchPlace();
         ShowToast($"Palette: {_colours.Palettes[index].Name}");
         Recolor();
     }
@@ -347,6 +358,7 @@ public sealed partial class MainForm
     private void ChangeDensity(double factor)
     {
         _colours.SetDensity(_colours.Density * factor);
+        TouchPlace();
         ShowToast($"Colour density: {_colours.Density:0.##}x");
         Recolor();
     }

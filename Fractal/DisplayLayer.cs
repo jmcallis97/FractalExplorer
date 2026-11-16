@@ -108,5 +108,55 @@ internal sealed class DisplayLayer : IDisposable
         g.PixelOffsetMode = PixelOffsetMode.Default;
     }
 
+    /// <summary>
+    /// A copy of the coloured image shrunk to <paramref name="width"/> pixels wide (never
+    /// enlarged), each pixel the average of the pixels it covers. Null if nothing is shown.
+    /// </summary>
+    public Bitmap? CreateThumbnail(int width)
+    {
+        if (Field == null || _buffer == null) return null;
+        int sw = Field.View.Width, sh = Field.View.Height;
+        if (_buffer.Length != sw * sh || sw <= 0 || sh <= 0) return null;
+        int tw = Math.Min(width, sw);
+        int th = Math.Max(1, (int)Math.Round((double)sh * tw / sw));
+
+        var pixels = new int[tw * th];
+        for (int ty = 0; ty < th; ty++)
+        {
+            int y0 = (int)((long)ty * sh / th), y1 = Math.Max(y0 + 1, (int)((long)(ty + 1) * sh / th));
+            for (int tx = 0; tx < tw; tx++)
+            {
+                int x0 = (int)((long)tx * sw / tw), x1 = Math.Max(x0 + 1, (int)((long)(tx + 1) * sw / tw));
+                long r = 0, g = 0, b = 0;
+                for (int y = y0; y < y1; y++)
+                {
+                    int row = y * sw;
+                    for (int x = x0; x < x1; x++)
+                    {
+                        int c = _buffer[row + x];
+                        r += (c >> 16) & 0xFF;
+                        g += (c >> 8) & 0xFF;
+                        b += c & 0xFF;
+                    }
+                }
+                long n = (long)(y1 - y0) * (x1 - x0);
+                pixels[ty * tw + tx] = unchecked((int)0xFF000000) | (int)(r / n) << 16 | (int)(g / n) << 8 | (int)(b / n);
+            }
+        }
+
+        var bmp = new Bitmap(tw, th, PixelFormat.Format32bppArgb);
+        var data = bmp.LockBits(new Rectangle(0, 0, tw, th), ImageLockMode.WriteOnly, bmp.PixelFormat);
+        try
+        {
+            for (int y = 0; y < th; y++)
+                Marshal.Copy(pixels, y * tw, data.Scan0 + y * data.Stride, tw);
+        }
+        finally
+        {
+            bmp.UnlockBits(data);
+        }
+        return bmp;
+    }
+
     public void Dispose() => _bitmap?.Dispose();
 }

@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Runtime.InteropServices;
 using Fractal.Deep;
 
@@ -135,11 +134,8 @@ public sealed partial class MainForm
 
     private void CopyLocation()
     {
-        var v = _view.Current();
-        var (x, y) = _view.CenterText(v);
-        var inv = CultureInfo.InvariantCulture;
-        string text = $"Re: {x}\r\nIm: {y}\r\nPixel size: {v.Scale.ToString("R", inv)}\r\nZoom: {_view.Zoom.ToString("G6", inv)}\r\n" +
-                      $"Iterations: {_view.MaxIterations}\r\nMapping: {_colours.Mapping}\r\nColour density: {_colours.Density.ToString("0.####", inv)}";
+        var (x, y) = _view.CenterText(_view.Current());
+        string text = new Fractal.Location(x, y, _view.Zoom, _view.MaxIterations, _colours.Density, _colours.Mapping).ToText();
         try
         {
             Clipboard.SetText(text);

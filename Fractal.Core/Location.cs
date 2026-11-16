@@ -13,6 +13,18 @@ public sealed record Location(string Re, string Im, double Zoom, int? Iterations
                               double? Density = null, ColorMapping? Mapping = null,
                               bool Snap = false, double? SnapZoom = null)
 {
+    /// <summary>The Ctrl+C format: one "Key: value" line each, numbers in the invariant culture.</summary>
+    public string ToText()
+    {
+        var inv = CultureInfo.InvariantCulture;
+        var lines = new List<string> { $"Re: {Re}", $"Im: {Im}", $"Zoom: {Zoom.ToString("G6", inv)}" };
+        if (Iterations is int it) lines.Add($"Iterations: {it.ToString(inv)}");
+        if (Mapping is ColorMapping m) lines.Add($"Mapping: {m}");
+        if (Density is double d) lines.Add($"Colour density: {d.ToString("0.####", inv)}");
+        if (Snap) lines.Add(SnapZoom is double sz ? $"Snap: {sz.ToString("G6", inv)}" : "Snap");
+        return string.Join("\r\n", lines);
+    }
+
     /// <summary>
     /// Parses the Ctrl+C format ("Re: ...", "Im: ...", "Zoom: ...", "Iterations: ..." lines),
     /// or plain "re im [zoom]".

@@ -8,7 +8,8 @@ namespace Fractal;
 /// The explorer window. It ties together the view (<see cref="ViewState"/>), background
 /// rendering (<see cref="RenderPipeline"/>), colouring (<see cref="ColourState"/>), snap dives
 /// (<see cref="DiveController"/>) and what's drawn on top (<see cref="Overlay"/>).
-/// Input handling is in MainForm.Input.cs; snap, dive and locations in MainForm.Snap.cs.
+/// Input handling is in MainForm.Input.cs; snap, dive and locations in MainForm.Snap.cs;
+/// places you've been in MainForm.Places.cs.
 /// </summary>
 public sealed partial class MainForm : Form
 {
@@ -64,6 +65,7 @@ public sealed partial class MainForm : Form
         _pipeline.Stopped += OnRenderStopped;
 
         _colours.LoadUserPalettes();
+        LoadPlaces();
         if (startLocation != null && !TryGoTo(startLocation, out string error))
             ShowToast("Couldn't open location: " + error, 4);
 
@@ -146,6 +148,7 @@ public sealed partial class MainForm : Form
 
     private void OnRenderCompleted(Field target)
     {
+        NotePlaceRendered(target);
         _dive.PacedScale = target.View.Scale;
         _baseLayer.Field = target;
         _previewLayer.Field = null;
@@ -278,7 +281,7 @@ public sealed partial class MainForm : Form
             (_dive.TargetScale is double target ? $"Zooming in to {Mandelbrot.ZoomFor(target, ClientSize.Width):G3}x (Esc stops)\n" : "") +
             $"{EngineText(v)}   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}{(_pipeline.Progressive ? "+Prog" : "")}   {status} ({_pipeline.LastRenderPixels:N0} px rendered)\n" +
             $"Palette: {_colours.Active.Name}   Mapping: {_colours.Mapping}   Density: {_colours.Density:0.##}x   Cycling: {(_colours.Cycling ? $"{_colours.CycleSpeed:0.##}/s" : "off")}\n" +
-            "H: help   P: palettes   I: hide info";
+            "H: help   P: palettes   L: places   I: hide info";
     }
 
     private string EngineText(in Viewport v)
@@ -296,6 +299,12 @@ public sealed partial class MainForm : Form
     {
         _overlay.ShowToast(text, _clock.Elapsed.TotalSeconds + seconds);
         Invalidate();
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        base.OnFormClosing(e);
+        if (!e.Cancel) RecordPlaceOnClose(); // while the image is still on screen
     }
 
     protected override void OnFormClosed(FormClosedEventArgs e)

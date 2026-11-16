@@ -13,12 +13,35 @@ internal sealed class ViewState(Func<Size> clientSize)
 {
     private DeepAnchor _deepAnchor = null!;
     private double _anchorX, _anchorY; // nearest doubles to the anchor
+    private double _scale;
+    private long _panX, _panY;
+
+    /// <summary>
+    /// Raised just before the view moves (pan, zoom, jump), while it still shows the old place.
+    /// Not raised for changes that stay put: iterations, deep mode, window size.
+    /// </summary>
+    public event Action? Moving;
 
     public BigFixed AnchorX { get; private set; }
     public BigFixed AnchorY { get; private set; }
-    public double Scale { get; set; }
-    public long PanX { get; set; }
-    public long PanY { get; set; }
+
+    public double Scale
+    {
+        get => _scale;
+        set { if (value != _scale) { Moving?.Invoke(); _scale = value; } }
+    }
+
+    public long PanX
+    {
+        get => _panX;
+        set { if (value != _panX) { Moving?.Invoke(); _panX = value; } }
+    }
+
+    public long PanY
+    {
+        get => _panY;
+        set { if (value != _panY) { Moving?.Invoke(); _panY = value; } }
+    }
     public DeepMode DeepMode { get; set; } = DeepMode.Auto;
 
     /// <summary>Adjustment to the automatic iteration limit: +/-, a pasted location, auto iterations.</summary>
@@ -40,6 +63,7 @@ internal sealed class ViewState(Func<Size> clientSize)
 
     public void SetAnchor(BigFixed x, BigFixed y)
     {
+        Moving?.Invoke();
         AnchorX = x;
         AnchorY = y;
         _deepAnchor = new DeepAnchor(x, y);
