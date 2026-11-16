@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using Fractal.Deep;
 using Fractal.Gpu;
@@ -91,6 +92,24 @@ public sealed class MainForm : Form
     private static readonly string PaletteFolder =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "Fractal", "Palettes");
 
+    // ---- Snap and dive --------------------------------------------------------
+    // N finds the exact point the view is circling (Snap.Find, in the background) and then jumps
+    // or "dives" to it: the view centre glides onto the point while the zoom runs at a steady
+    // rate, never more than DiveMaxLead ahead of the newest render on screen (layers are drawn
+    // stretched until the render catches up). Renders are never cancelled during a dive; each one
+    // starts when the previous finishes, at whatever the view is by then.
+    private sealed record Dive(BigFixed X, BigFixed Y, double TargetScale, double SecondsPerDoubling,
+                               double PanX0, double PanY0, double Started);
+    private const double DivePanSeconds = 1.5;
+    private const double DiveMaxLead = 4;
+    private const int SnapBits = 1070; // ~320 digits: enough for any zoom the deep renderer reaches
+    private Dive? _dive;
+    private double _divePacedScale;          // scale of the newest render on screen (preview or full)
+    private double _diveSecondsPerDoubling = 0.5;
+    private bool _snapping;
+    private int _navigation;                 // bumped when the view moves; drops stale snap results
+    private Fractal.Location? _pendingSnap;  // snap asked for before the window was shown
+
     // ---- UI -------------------------------------------------------------------
     private bool _showInfo = true, _showHelp, _pickerOpen;
     private string? _toast;
@@ -166,6 +185,11 @@ public sealed class MainForm : Form
     {
         base.OnShown(e);
         RequestRender();
+        if (_pendingSnap != null)
+        {
+            StartSnap(false, _pendingSnap.SnapZoom);
+            _pendingSnap = null;
+        }
 
         // Find and self-test the GPU in the background (takes a few hundred ms); deep renders
         // use the CPU until it's ready, and for good if there isn't a usable one.
@@ -292,6 +316,7 @@ public sealed class MainForm : Form
     private void OnPreviewReady(Field target, Field preview)
     {
         if (_runningTarget != target) return; // a newer render has started
+        _divePacedScale = target.View.Scale;
         _previewLayer.Field = preview;
         _partialLayer.Field = null;           // older partial would sit on top of the newer preview
         ColorizeLayer(_previewLayer);
@@ -310,6 +335,7 @@ public sealed class MainForm : Form
         {
             _spare = _field?.Values;
             _field = target;
+            _divePacedScale = target.View.Scale;
             _lastRenderMs = ms;
             _lastRenderPixels = progress.Total;
             if (!reuse) _msPerMegapixel = ms / (target.View.Width * (double)target.View.Height / 1e6);
@@ -391,6 +417,8 @@ public sealed class MainForm : Form
             _lastPartialRefresh = now;
         }
 
+        if (_dive != null) StepDive(now, dt);
+
         if (_cycling && _field != null)
         {
             _offset += _cycleDirection * _cycleSpeed * dt;
@@ -438,6 +466,8 @@ public sealed class MainForm : Form
             return;
         }
 
+        StopDive();
+
         // Zoom, keeping the complex point under the cursor fixed on screen. Done in full
         // precision: new anchor = anchor + (cursor's global pixel) × old scale
         //                              - (cursor's offset from centre) × new scale.
@@ -472,12 +502,14 @@ public sealed class MainForm : Form
                 if (hit >= 0) SelectPalette(hit);
                 return;
             }
+            StopDive();
             BeginDrag(e.Location);
             Cursor = Cursors.SizeAll;
         }
         else if (e.Button == MouseButtons.Middle)
         {
             // Center the view on the clicked point.
+            StopDive();
             _panX += e.X - ClientSize.Width / 2;
             _panY += e.Y - ClientSize.Height / 2;
             RequestRender();
@@ -552,7 +584,8 @@ public sealed class MainForm : Form
                 ToggleFullScreen();
                 return true;
             case Keys.Escape:
-                if (_pickerOpen) { _pickerOpen = false; _hoverIndex = -1; Recolor(); }
+                if (_dive != null || _snapping) StopDive();
+                else if (_pickerOpen) { _pickerOpen = false; _hoverIndex = -1; Recolor(); }
                 else if (_showHelp) _showHelp = false;
                 else if (_fullScreen) ToggleFullScreen();
                 Invalidate();
@@ -687,6 +720,12 @@ case Keys.V:
             case Keys.Control | Keys.V:
                 PasteLocation();
                 return true;
+            case Keys.N:
+                StartSnap(ask: true);
+                return true;
+            case Keys.Shift | Keys.N:
+                StartSnap(ask: false);
+                return true;
             case Keys.U:
                 if (_renderer.Gpu == null) { ShowToast($"No GPU in use: {_renderer.GpuFailure ?? _gpuStatus}", 3); return true; }
                 _renderer.UseGpu = !_renderer.UseGpu;
@@ -704,6 +743,7 @@ case Keys.V:
 
     private void Pan(int dx, int dy)
     {
+        StopDive();
         _panX += dx;
         _panY += dy;
         RequestRender();
@@ -723,7 +763,9 @@ case Keys.V:
     {
         var v = CurrentView();
         var (x, y) = CenterText(v);
-        string text = $"Re: {x}\r\nIm: {y}\r\nPixel size: {v.Scale:R}\r\nZoom: {Zoom:G6}\r\nIterations: {MaxIterations}";
+        var inv = CultureInfo.InvariantCulture;
+        string text = $"Re: {x}\r\nIm: {y}\r\nPixel size: {v.Scale.ToString("R", inv)}\r\nZoom: {Zoom.ToString("G6", inv)}\r\n" +
+                      $"Iterations: {MaxIterations}\r\nMapping: {_mapping}\r\nColour density: {_density.ToString("0.####", inv)}";
         try
         {
             Clipboard.SetText(text);
@@ -744,18 +786,21 @@ case Keys.V:
             ShowToast("Couldn't read clipboard: " + ex.Message);
             return;
         }
-        if (TryGoTo(text, out string error)) ShowToast("Went to pasted location");
+        if (TryGoTo(text, out string error)) { if (!_snapping) ShowToast("Went to pasted location"); }
         else ShowToast("Clipboard isn't a location: " + error, 3);
     }
 
     /// <summary>
     /// Jumps to a location in the Ctrl+C format ("Re: ...", "Im: ...", "Zoom: ..." lines; the
-    /// zoom keeps the same framing whatever the window size), or plain "re im zoom".
+    /// zoom keeps the same framing whatever the window size), or plain "re im zoom". Mapping and
+    /// colour density are applied if present; a "Snap" line then zooms in to the exact spiral
+    /// centre or minibrot there (to the zoom given after "Snap:", if any).
     /// </summary>
     private bool TryGoTo(string text, out string error)
     {
         if (!Fractal.Location.TryParse(text, out var loc, out error)) return false;
-        double scale = Math.Clamp(InitialViewWidth / (loc.Zoom * Math.Max(1, ClientSize.Width)), MinScale, 1);
+        StopDive();
+        double scale = ScaleForZoom(loc.Zoom);
         int bits = BigFixed.BitsFor(scale);
         SetAnchor(BigFixed.Parse(loc.Re, bits), BigFixed.Parse(loc.Im, bits));
         _panX = _panY = 0;
@@ -765,13 +810,187 @@ case Keys.V:
             _iterationBoost = 0;
             _iterationBoost = it - MaxIterations; // the limit that was in use when it was copied
         }
+        if (loc.Density is double d) _density = Math.Clamp(d, 0.01, 100);
+        if (loc.Mapping is ColorMapping mapping) _mapping = mapping;
+        if (loc.Density != null || loc.Mapping != null) Recolor();
         RequestRender();
+        if (loc.Snap)
+        {
+            if (IsHandleCreated) StartSnap(false, loc.SnapZoom);
+            else _pendingSnap = loc; // opened from the command line: snap once the window is up
+        }
         error = "";
         return true;
     }
 
+    private double ScaleForZoom(double zoom) =>
+        Math.Clamp(InitialViewWidth / (zoom * Math.Max(1, ClientSize.Width)), MinScale, 1);
+
+    // =========================================================================
+    // Snap and dive
+    // =========================================================================
+
+    /// <summary>
+    /// Looks for the spiral centre or minibrot the view is circling, in the background, then asks
+    /// what to do (<paramref name="ask"/>) or dives straight in to <paramref name="targetZoom"/>
+    /// (default: as deep as makes sense for what was found).
+    /// </summary>
+    private void StartSnap(bool ask, double? targetZoom = null)
+    {
+        if (_snapping) { ShowToast("Still looking..."); return; }
+        StopDive();
+        int generation = _navigation;
+        var v = CurrentView();
+        var (x, y) = CenterText(v);
+        var loc = new Fractal.Location(x, y, Zoom, MaxIterations);
+        int maxIter = Math.Max(200_000, MaxIterations * 4);
+        _snapping = true;
+        ShowToast("Looking for a spiral centre or minibrot... (Esc cancels)", 120);
+        Task.Run(() => Snap.Find(loc, maxIter, SnapBits, _ => { }, out _)).ContinueWith(t => Post(() =>
+        {
+            _snapping = false;
+            if (generation != _navigation) return; // cancelled, or the view moved meanwhile
+            if (t.IsFaulted) { ShowToast("Snap failed: " + t.Exception?.GetBaseException().Message, 4); return; }
+            if (t.Result is not { } r)
+            {
+                ShowToast("Nothing to snap to here: centre a spiral's eye or a minibrot and zoom in a little", 5);
+                return;
+            }
+            OnSnapFound(r, ask, targetZoom);
+        }), TaskScheduler.Default);
+    }
+
+    private void OnSnapFound(Snap.Result r, bool ask, double? targetZoom)
+    {
+        double zoom = targetZoom ?? Snap.SuggestedZoom(r);
+        var choice = SnapDialog.Choice.Dive;
+        if (ask)
+        {
+            _toast = null;
+            Invalidate();
+            using var dlg = new SnapDialog(Snap.Describe(r), r.DistanceInViews, zoom, _diveSecondsPerDoubling);
+            if (dlg.ShowDialog(this) != DialogResult.OK) return;
+            choice = dlg.Result;
+            zoom = dlg.TargetZoom;
+            if (choice == SnapDialog.Choice.Dive) _diveSecondsPerDoubling = dlg.SecondsPerDoubling;
+        }
+        else
+        {
+            ShowToast(r.Kind == Snap.Kind.Misiurewicz ? "Found a spiral centre: zooming in (Esc stops)"
+                                                      : $"Found a period {r.Period} minibrot: zooming in (Esc stops)", 3);
+        }
+
+        switch (choice)
+        {
+            case SnapDialog.Choice.Dive:
+                StartDive(r.Re, r.Im, ScaleForZoom(zoom));
+                break;
+            case SnapDialog.Choice.Jump:
+                GoToPoint(r.Re, r.Im, ScaleForZoom(zoom));
+                break;
+            case SnapDialog.Choice.Centre:
+                GoToPoint(r.Re, r.Im, _scale);
+                break;
+        }
+    }
+
+    private void GoToPoint(BigFixed x, BigFixed y, double scale)
+    {
+        int bits = BigFixed.BitsFor(scale);
+        SetAnchor(x.WithBits(bits), y.WithBits(bits));
+        _panX = _panY = 0;
+        _scale = scale;
+        RequestRender();
+    }
+
+    private void StartDive(BigFixed x, BigFixed y, double targetScale)
+    {
+        var v = CurrentView();
+        int bits = Math.Max(BigFixed.BitsFor(v.Scale), _hx.Bits);
+        // Where the view centre is now, relative to the point, in pixels (y down).
+        double px = (_hx.WithBits(bits) - x.WithBits(bits)).ToDouble() / v.Scale + v.PanX;
+        double py = (y.WithBits(bits) - _hy.WithBits(bits)).ToDouble() / v.Scale + v.PanY;
+        _dive = new Dive(x, y, targetScale, _diveSecondsPerDoubling, px, py, _clock.Elapsed.TotalSeconds);
+        _divePacedScale = _field?.View.Scale ?? v.Scale;
+        _diveAnchorBits = -1;
+        ApplyDiveView(v.Scale, px, py);
+        Invalidate();
+    }
+
+    private int _diveAnchorBits;
+
+    /// <summary>Anchors the view on the dive's point at <paramref name="scale"/>, centre offset by the given pixels.</summary>
+    private void ApplyDiveView(double scale, double panX, double panY)
+    {
+        var d = _dive!;
+        int bits = BigFixed.BitsFor(scale);
+        if (bits != _diveAnchorBits)
+        {
+            SetAnchor(d.X.WithBits(bits), d.Y.WithBits(bits));
+            _diveAnchorBits = bits;
+        }
+        _scale = scale;
+        _panX = (long)Math.Round(panX);
+        _panY = (long)Math.Round(panY);
+    }
+
+    private void StepDive(double now, double dt)
+    {
+        var d = _dive!;
+        // The centre glides onto the point (smoothstep), while the zoom runs at a steady rate.
+        double e = Math.Clamp((now - d.Started) / DivePanSeconds, 0, 1);
+        e = e * e * (3 - 2 * e);
+
+        double logNow = Math.Log2(_scale), logTarget = Math.Log2(d.TargetScale);
+        double dir = Math.Sign(logTarget - logNow);
+        double step = dt / d.SecondsPerDoubling;
+        bool reached = Math.Abs(logTarget - logNow) <= step;
+        double next = reached ? logTarget : logNow + dir * step;
+        // Don't run more than DiveMaxLead ahead of the newest render on screen.
+        double limit = Math.Log2(_divePacedScale) + dir * Math.Log2(DiveMaxLead);
+        if (dir * (next - limit) > 0)
+        {
+            reached = false;
+            next = dir > 0 ? Math.Max(logNow, limit) : Math.Min(logNow, limit);
+        }
+
+        bool arrived = reached && e >= 1;
+        ApplyDiveView(reached ? d.TargetScale : Math.Pow(2, next), d.PanX0 * (1 - e), d.PanY0 * (1 - e));
+        if (arrived)
+        {
+            _dive = null;
+            ShowToast("Arrived");
+            RequestRender();
+            return;
+        }
+        // Start the next render as soon as the last one is done; never cancel one mid-dive.
+        if (_running == null && ClientSize.Width > 0 && ClientSize.Height > 0)
+        {
+            var want = CurrentView();
+            if (_field == null || _field.View != want) StartRender(want);
+        }
+        Invalidate();
+    }
+
+    /// <summary>Stops a dive (the view stays where it is) and drops any snap still being looked for.</summary>
+    private void StopDive()
+    {
+        _navigation++;
+        if (_dive != null)
+        {
+            _dive = null;
+            ShowToast("Zoom stopped");
+            RequestRender();
+        }
+        else if (_snapping)
+        {
+            ShowToast("Snap cancelled");
+        }
+    }
+
     private void ResetView()
     {
+        StopDive();
         SetAnchor(BigFixed.FromDouble(InitialCenterX, 64), BigFixed.FromDouble(InitialCenterY, 64));
         _panX = _panY = 0;
         _scale = InitialViewWidth / Math.Max(1, ClientSize.Width);
@@ -951,6 +1170,7 @@ case Keys.V:
         string text =
             $"Center: {Clip(cx)}, {Clip(cy)}\n" +
             $"Zoom: {Zoom:G4}x   Iterations: {MaxIterations}   {precision}\n" +
+            (_dive != null ? $"Zooming in to {InitialViewWidth / (_dive.TargetScale * Math.Max(1, ClientSize.Width)):G3}x (Esc stops)\n" : "") +
             $"{EngineText(v)}   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}{(_progressive ? "+Prog" : "")}   {status} ({_lastRenderPixels:N0} px rendered)\n" +
             $"Palette: {ActivePalette.Name}   Mapping: {_mapping}   Density: {_density:0.##}x   Cycling: {(_cycling ? $"{_cycleSpeed:0.##}/s" : "off")}\n" +
             "H: help   P: palettes   I: hide info";
@@ -1019,7 +1239,10 @@ case Keys.V:
             "  A                   Auto iterations on/off (raises the limit when detail is cut off)\n" +
             "  R / Home            Reset view\n" +
             "  X                   Deep zoom: auto / always / off\n" +
-            "  Ctrl+C / Ctrl+V     Copy / go to location (full precision)\n" +
+            "  Ctrl+C / Ctrl+V     Copy / go to location (full precision, with mapping and density;\n" +
+            "                      a pasted \"Snap\" line zooms in to the spiral centre or minibrot there)\n" +
+            "  N / Shift+N         Snap: find the spiral centre or minibrot here (ask / zoom straight in)\n" +
+            "  Esc                 Stop a snap zoom\n" +
             "\n" +
             "COLOUR (instant — no recompute)\n" +
             "  P                   Palette picker (hover previews)\n" +

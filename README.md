@@ -12,7 +12,12 @@ A fast, interactive Mandelbrot set explorer for Windows (C# / .NET 10, WinForms)
 - **Deep zoom** to about 10²⁹⁰× using perturbation theory: one reference orbit is computed in
   arbitrary precision and every pixel is iterated in fast doubles relative to it (with
   rebasing to avoid glitches). Switches on automatically past 10¹³× (X key: auto / always /
-  off). Ctrl+C copies the location in full precision.
+  off). Ctrl+C copies the location in full precision, with the iteration limit, colour mapping
+  and density; Ctrl+V goes there.
+- **Snap** (N): finds the exact point the view is circling (the eye of an endless spiral or a
+  minibrot's nucleus) and offers to zoom in to it (animated), jump there, or centre on it.
+  Shift+N zooms straight in. A pasted location with a `Snap` line (or `Snap: 1e100` to choose
+  where to stop) does the same after going there.
 - **Palettes**: 12 built-ins, random palette generator, live hover preview, animated colour
   cycling, Fractint `.map` import/export
 

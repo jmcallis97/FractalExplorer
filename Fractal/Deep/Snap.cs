@@ -31,6 +31,16 @@ public static class Snap
         double MinibrotSize,        // Nucleus: rough size of the minibrot (in the units of c)
         int NewtonSteps);
 
+    /// <summary>Zoom to stop at: as deep as the maths goes for a spiral, framing the minibrot otherwise.</summary>
+    public static double SuggestedZoom(Result r) =>
+        r.Kind == Kind.Misiurewicz ? 1e285 : Location.ViewWidthAtZoom1 / (r.MinibrotSize * 6);
+
+    /// <summary>One or two lines saying what was found.</summary>
+    public static string Describe(Result r) => r.Kind == Kind.Misiurewicz
+        ? $"The eye of an endless spiral (Misiurewicz point, preperiod {r.Preperiod}, period {r.Period}).\n" +
+          $"The picture repeats every {r.MultiplierAbs:G4}x of zoom, turned {r.TurnDegrees:0} degrees."
+        : $"A minibrot of period {r.Period}, about {r.MinibrotSize:G3} across.";
+
     /// <param name="targetBits">Fractional bits of the answer (about 3.32 per decimal digit).</param>
     public static Result? Find(Location loc, int maxIter, int targetBits, Action<string> log, out string why)
     {

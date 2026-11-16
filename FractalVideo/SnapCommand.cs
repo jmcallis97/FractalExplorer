@@ -66,12 +66,12 @@ static class SnapCommand
             Console.WriteLine($"Found the eye of the spiral: a Misiurewicz point, preperiod {r.Preperiod}, period {r.Period}.");
             Console.WriteLine($"The picture repeats every {r.MultiplierAbs:G6}x of zoom, turned {r.TurnDegrees:0.0} degrees " +
                               $"({Math.Log(2) / Math.Log(r.MultiplierAbs):0.0} repeats per doubling).");
-            outZoom = zoom ?? 1e285;
+            outZoom = zoom ?? Snap.SuggestedZoom(r);
         }
         else
         {
             Console.WriteLine($"Found a minibrot of period {r.Period}, about {r.MinibrotSize:G3} across.");
-            outZoom = zoom ?? Location.ViewWidthAtZoom1 / (r.MinibrotSize * 6);
+            outZoom = zoom ?? Snap.SuggestedZoom(r);
         }
         Console.WriteLine($"It is {r.DistanceInViews:G3} view widths from your centre; Newton took {r.NewtonSteps} steps, {sw.Elapsed.TotalSeconds:0.0} s.");
 

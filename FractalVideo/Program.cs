@@ -27,6 +27,9 @@ if (!Location.TryParse(File.ReadAllText(opt.LocationFile), out var loc, out stri
     Console.Error.WriteLine($"Can't read location from {opt.LocationFile}: {locError}");
     return 1;
 }
+// Colouring copied with the location (Ctrl+C in the app) applies unless given on the command line.
+if (!opt.DensityGiven && loc.Density is double locDensity) opt.Density = locDensity;
+if (!opt.MappingGiven && loc.Mapping is ColorMapping locMapping) opt.Mapping = locMapping;
 
 string? ffmpeg = FindFfmpeg(opt.Ffmpeg);
 if (ffmpeg == null)
@@ -367,6 +370,7 @@ sealed class Options
     public string Palette = "Classic", Preset = "medium", Encoder = "x264";
     public ColorMapping Mapping = ColorMapping.Linear;
     public double Density = 1, Offset = 0;
+    public bool DensityGiven, MappingGiven;
     public double FinaleSeconds = 0, FinalePaletteSeconds = 6, FinaleFadeSeconds = 2;
     public int Seed = Environment.TickCount;
     public string? Ffmpeg;
@@ -386,7 +390,7 @@ sealed class Options
                   --hold-start 1 --hold-end 3   seconds to pause on the first / last frame
                   --palette Classic    built-in or saved palette name, or a .map file
                   --mapping Linear     Linear | Sqrt | Log
-                  --density 1 --offset 0
+                  --density 1 --offset 0  (mapping and density default to the location's, if copied with them)
                   --finale 120         seconds of random palettes on the last view, after the hold
                   --finale-palette 6   seconds per palette, including its fade
                   --finale-fade 2      seconds each fade takes
@@ -421,8 +425,8 @@ sealed class Options
                 case "--hold-start": o.HoldStart = D(); break;
                 case "--hold-end": o.HoldEnd = D(); break;
                 case "--palette": o.Palette = Next(); break;
-                case "--mapping": o.Mapping = Enum.Parse<ColorMapping>(Next(), true); break;
-                case "--density": o.Density = D(); break;
+                case "--mapping": o.Mapping = Enum.Parse<ColorMapping>(Next(), true); o.MappingGiven = true; break;
+                case "--density": o.Density = D(); o.DensityGiven = true; break;
                 case "--finale": o.FinaleSeconds = D(); break;
                 case "--finale-palette": o.FinalePaletteSeconds = D(); break;
                 case "--finale-fade": o.FinaleFadeSeconds = D(); break;
