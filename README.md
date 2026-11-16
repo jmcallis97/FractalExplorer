@@ -16,7 +16,9 @@ A fast, interactive Mandelbrot set explorer for Windows (C# / .NET 10, WinForms)
   and density; Ctrl+V goes there.
 - **Snap** (N): finds the exact point the view is circling (the eye of an endless spiral or a
   minibrot's nucleus) and offers to zoom in to it (animated), jump there, or centre on it.
-  Shift+N zooms straight in. A pasted location with a `Snap` line (or `Snap: 1e100` to choose
+  Shift+N zooms straight in. **Ctrl+click** snaps at the cursor instead and works on any
+  structure, whatever its shape: it finds the minibrot the structure is built around by box
+  period detection (Ctrl+Shift+click zooms straight in). A pasted location with a `Snap` line (or `Snap: 1e100` to choose
   where to stop) does the same after going there.
 - **Palettes**: 12 built-ins, random palette generator, live hover preview, animated colour
   cycling, Fractint `.map` import/export

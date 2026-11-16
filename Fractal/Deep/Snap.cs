@@ -48,18 +48,8 @@ public static class Snap
         int inBits = BigFixed.BitsFor(viewWidth / 4096);
         var c0 = new BC(BigFixed.Parse(loc.Re, inBits), BigFixed.Parse(loc.Im, inBits));
 
-        // 1. The orbit of the given centre, in full precision, stored as doubles (the orbit
-        //    itself is of order 1, so doubles are plenty for recognising its shape).
-        var orbit = new List<Complex> { Complex.Zero };
-        var z = BC.Zero(inBits);
-        bool escaped = false;
-        for (int n = 1; n <= maxIter; n++)
-        {
-            z = z.Sq() + c0;
-            var d = z.ToComplex();
-            orbit.Add(d);
-            if (d.Magnitude > 2) { escaped = true; break; }
-        }
+        // 1. The orbit of the given centre.
+        var orbit = OrbitOf(c0, maxIter, default, out bool escaped);
         log(escaped ? $"Orbit escapes after {orbit.Count - 1} iterations."
                     : $"Orbit stays bounded for {maxIter} iterations (inside the set).");
 
@@ -98,6 +88,115 @@ public static class Snap
         why = "No repeating pattern found near the centre. Centre the view on the spiral's eye " +
               "(or the minibrot) and zoom in a little further, then try again.";
         return null;
+    }
+
+    /// <summary>
+    /// Snap at a point picked by hand (the cursor): the eye of a spiral right there if there is
+    /// one, otherwise the lowest-period minibrot within <paramref name="boxRadius"/> of it, found
+    /// by box period detection, which works for any shape of structure.
+    /// </summary>
+    public static Result? FindAt(Location loc, double boxRadius, int maxIter, int targetBits,
+                                 CancellationToken token, out string why)
+    {
+        double viewWidth = Location.ViewWidthAtZoom1 / loc.Zoom;
+        int inBits = BigFixed.BitsFor(boxRadius / 4096);
+        var c0 = new BC(BigFixed.Parse(loc.Re, inBits), BigFixed.Parse(loc.Im, inBits));
+        Action<string> log = _ => { };
+
+        // 1. A spiral's eye under the cursor: the orbit lands on a repelling cycle.
+        var orbit = OrbitOf(c0, maxIter, token, out _);
+        foreach (var (m, p) in CycleCandidates(orbit).Take(3))
+        {
+            token.ThrowIfCancellationRequested();
+            double lamLog = 0;
+            for (int k = m; k < m + p; k++) lamLog += Math.Log((2 * orbit[k]).Magnitude);
+            if (lamLog < 0) break; // inside a minibrot: the box search below finds its nucleus
+            var mis = SolveMisiurewicz(c0, m, p, targetBits, viewWidth, log);
+            if (mis != null && mis.DistanceInViews * viewWidth < 2 * boxRadius) { why = ""; return mis; }
+        }
+
+        // 2. The minibrot this structure is built around. If the box's corners escape before it
+        //    surrounds one, try smaller boxes, then bigger ones (they hold lower periods).
+        foreach (double f in (double[])[1, 0.5, 0.25, 2, 4, 8])
+        {
+            double r = boxRadius * f;
+            int p = BoxPeriod(c0, r, maxIter, inBits, token);
+            if (p < 0) continue;
+            var nuc = SolveNucleus(c0, p, targetBits, viewWidth, log);
+            if (nuc != null && nuc.DistanceInViews * viewWidth < 2 * r) { why = ""; return nuc; }
+        }
+        why = "Nothing found under the cursor: zoom in a little, or point at a different part of the structure.";
+        return null;
+    }
+
+    /// <summary>
+    /// Box period (R. Munafo; C. Heiland-Allen): iterate the four corners of a box of c values
+    /// together. The first n at which the image of the box surrounds 0 is the period of the
+    /// lowest-period minibrot inside the box. -1 if a corner escapes first (box too big) or
+    /// nothing turns up within <paramref name="maxIter"/>.
+    /// </summary>
+    private static int BoxPeriod(BC c0, double r, int maxIter, int bits, CancellationToken token)
+    {
+        var rr = BigFixed.FromDouble(r, bits);
+        var centre = c0.WithBits(bits);
+        int[] sx = [-1, 1, 1, -1], sy = [-1, -1, 1, 1];
+        var corners = new BC[4];
+        var z = new BC[4];
+        for (int k = 0; k < 4; k++)
+        {
+            corners[k] = new BC(sx[k] < 0 ? centre.R - rr : centre.R + rr, sy[k] < 0 ? centre.I - rr : centre.I + rr);
+            z[k] = BC.Zero(bits);
+        }
+        Span<Complex> pts = stackalloc Complex[4];
+        for (int n = 1; n <= maxIter; n++)
+        {
+            if ((n & 255) == 0) token.ThrowIfCancellationRequested();
+            for (int k = 0; k < 4; k++)
+            {
+                z[k] = z[k].Sq() + corners[k];
+                pts[k] = z[k].ToComplex();
+                if (pts[k].Magnitude > 1e10) return -1;
+            }
+            if (SurroundsOrigin(pts)) return n;
+        }
+        return -1;
+    }
+
+    /// <summary>Whether the quadrilateral through the points winds around 0 (ray-crossing test).</summary>
+    private static bool SurroundsOrigin(ReadOnlySpan<Complex> pts)
+    {
+        bool inside = false;
+        for (int i = 0; i < pts.Length; i++)
+        {
+            var a = pts[i];
+            var b = pts[(i + 1) % pts.Length];
+            if ((a.Imaginary <= 0) != (b.Imaginary <= 0))
+            {
+                double x = a.Real + (b.Real - a.Real) * (0 - a.Imaginary) / (b.Imaginary - a.Imaginary);
+                if (x > 0) inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    /// <summary>
+    /// The orbit of c in full precision, stored as doubles (the orbit itself is of order 1, so
+    /// doubles are plenty for recognising its shape). Stops when it escapes.
+    /// </summary>
+    private static List<Complex> OrbitOf(BC c, int maxIter, CancellationToken token, out bool escaped)
+    {
+        var orbit = new List<Complex> { Complex.Zero };
+        var z = BC.Zero(c.R.Bits);
+        escaped = false;
+        for (int n = 1; n <= maxIter; n++)
+        {
+            if ((n & 1023) == 0) token.ThrowIfCancellationRequested();
+            z = z.Sq() + c;
+            var d = z.ToComplex();
+            orbit.Add(d);
+            if (d.Magnitude > 2) { escaped = true; break; }
+        }
+        return orbit;
     }
 
     /// <summary>(m, p) where the orbit from step m onwards repeats every p steps, smallest p first.</summary>

@@ -107,6 +107,8 @@ public sealed class MainForm : Form
     private double _divePacedScale;          // scale of the newest render on screen (preview or full)
     private double _diveSecondsPerDoubling = 0.5;
     private bool _snapping;
+    private CancellationTokenSource? _snapCts;
+    private const double SnapBoxPixels = 16;  // snap at cursor searches a box this far either side
     private int _navigation;                 // bumped when the view moves; drops stale snap results
     private Fractal.Location? _pendingSnap;  // snap asked for before the window was shown
 
@@ -503,6 +505,11 @@ public sealed class MainForm : Form
                 return;
             }
             StopDive();
+            if ((ModifierKeys & Keys.Control) != 0)
+            {
+                StartSnap(ask: (ModifierKeys & Keys.Shift) == 0, at: e.Location);
+                return;
+            }
             BeginDrag(e.Location);
             Cursor = Cursors.SizeAll;
         }
@@ -750,11 +757,14 @@ case Keys.V:
     }
 
     /// <summary>View centre in full precision, with enough digits to pin down a pixel.</summary>
-    private (string X, string Y) CenterText(Viewport v)
+    private (string X, string Y) CenterText(Viewport v) => PointText(v, v.Width / 2, v.Height / 2);
+
+    /// <summary>The point under window pixel (<paramref name="sx"/>, <paramref name="sy"/>), in full precision.</summary>
+    private (string X, string Y) PointText(Viewport v, int sx, int sy)
     {
         int bits = Math.Max(_hx.Bits, BigFixed.BitsFor(v.Scale));
-        var cx = _hx.WithBits(bits) + BigFixed.FromDouble(v.PanX * v.Scale, bits);
-        var cy = _hy.WithBits(bits) - BigFixed.FromDouble(v.PanY * v.Scale, bits);
+        var cx = _hx.WithBits(bits) + BigFixed.FromDouble((v.PanX + sx - v.Width / 2) * v.Scale, bits);
+        var cy = _hy.WithBits(bits) - BigFixed.FromDouble((v.PanY + sy - v.Height / 2) * v.Scale, bits);
         int digits = Math.Max(16, (int)Math.Ceiling(-Math.Log10(v.Scale)) + 2);
         return (cx.ToDecimalString(digits), cy.ToDecimalString(digits));
     }
@@ -831,29 +841,38 @@ case Keys.V:
     // =========================================================================
 
     /// <summary>
-    /// Looks for the spiral centre or minibrot the view is circling, in the background, then asks
+    /// Looks for the spiral centre or minibrot the view is circling (or, with
+    /// <paramref name="at"/>, the one under that window pixel), in the background, then asks
     /// what to do (<paramref name="ask"/>) or dives straight in to <paramref name="targetZoom"/>
     /// (default: as deep as makes sense for what was found).
     /// </summary>
-    private void StartSnap(bool ask, double? targetZoom = null)
+    private void StartSnap(bool ask, double? targetZoom = null, Point? at = null)
     {
         if (_snapping) { ShowToast("Still looking..."); return; }
         StopDive();
         int generation = _navigation;
         var v = CurrentView();
-        var (x, y) = CenterText(v);
+        var (x, y) = at is { } pt ? PointText(v, pt.X, pt.Y) : CenterText(v);
         var loc = new Fractal.Location(x, y, Zoom, MaxIterations);
         int maxIter = Math.Max(200_000, MaxIterations * 4);
+        double boxRadius = SnapBoxPixels * v.Scale;
+        var cts = new CancellationTokenSource();
+        _snapCts = cts;
         _snapping = true;
-        ShowToast("Looking for a spiral centre or minibrot... (Esc cancels)", 120);
-        Task.Run(() => Snap.Find(loc, maxIter, SnapBits, _ => { }, out _)).ContinueWith(t => Post(() =>
+        ShowToast(at != null ? "Looking for the minibrot or spiral eye under the cursor... (Esc cancels)"
+                             : "Looking for a spiral centre or minibrot... (Esc cancels)", 120);
+        Task.Run(() => at != null ? Snap.FindAt(loc, boxRadius, maxIter, SnapBits, cts.Token, out _)
+                                  : Snap.Find(loc, maxIter, SnapBits, _ => { }, out _)).ContinueWith(t => Post(() =>
         {
             _snapping = false;
+            if (_snapCts == cts) _snapCts = null;
+            cts.Dispose();
             if (generation != _navigation) return; // cancelled, or the view moved meanwhile
             if (t.IsFaulted) { ShowToast("Snap failed: " + t.Exception?.GetBaseException().Message, 4); return; }
             if (t.Result is not { } r)
             {
-                ShowToast("Nothing to snap to here: centre a spiral's eye or a minibrot and zoom in a little", 5);
+                ShowToast(at != null ? "Nothing found under the cursor: zoom in a little, or try another part of it"
+                                     : "Nothing to snap to here: centre a spiral's eye or a minibrot and zoom in a little", 5);
                 return;
             }
             OnSnapFound(r, ask, targetZoom);
@@ -878,6 +897,14 @@ case Keys.V:
         {
             ShowToast(r.Kind == Snap.Kind.Misiurewicz ? "Found a spiral centre: zooming in (Esc stops)"
                                                       : $"Found a period {r.Period} minibrot: zooming in (Esc stops)", 3);
+        }
+
+        // A minibrot needs an iteration limit of some multiple of its period to show its detail.
+        if (r.Kind == Snap.Kind.Nucleus && choice != SnapDialog.Choice.Centre)
+        {
+            int autoAt = (int)(BaseIterations + 100 * Math.Log2(Math.Max(1, zoom)));
+            long need = Math.Min(20L * r.Period, AutoIterationCap);
+            if (autoAt + _iterationBoost < need) _iterationBoost = (int)need - autoAt;
         }
 
         switch (choice)
@@ -984,6 +1011,7 @@ case Keys.V:
         }
         else if (_snapping)
         {
+            _snapCts?.Cancel();
             ShowToast("Snap cancelled");
         }
     }
@@ -1242,6 +1270,7 @@ case Keys.V:
             "  Ctrl+C / Ctrl+V     Copy / go to location (full precision, with mapping and density;\n" +
             "                      a pasted \"Snap\" line zooms in to the spiral centre or minibrot there)\n" +
             "  N / Shift+N         Snap: find the spiral centre or minibrot here (ask / zoom straight in)\n" +
+            "  Ctrl+click          Snap at the cursor: works on any structure (Ctrl+Shift+click zooms straight in)\n" +
             "  Esc                 Stop a snap zoom\n" +
             "\n" +
             "COLOUR (instant — no recompute)\n" +
