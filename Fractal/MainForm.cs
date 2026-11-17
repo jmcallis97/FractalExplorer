@@ -60,6 +60,7 @@ public sealed partial class MainForm : Form
         _view.Reset();
         _dive = new DiveController(_view);
         _overlay = new Overlay(_colours);
+        BuildKeyMap();
         _pipeline = new RenderPipeline(_renderer, Post, WantedView);
         _pipeline.PreviewReady += OnPreviewReady;
         _pipeline.Completed += OnRenderCompleted;
@@ -294,7 +295,7 @@ public sealed partial class MainForm : Form
         string cpu = $"Threads: {_renderer.WorkerCount} of {Environment.ProcessorCount} cores";
         string gpu = _renderer.GpuFailure != null ? $"GPU failed: {_renderer.GpuFailure}"
             : _renderer.Gpu == null ? $"GPU: {_gpuStatus}"
-            : !_renderer.UseGpu ? "GPU: off (U)"
+            : !_renderer.UseGpu ? "GPU: off (F5)"
             : v.Deep != null && _renderer.LastRenderUsedGpu ? $"GPU: {_renderer.Gpu.Name}"
             : v.Deep != null && _renderer.LastRenderGpuImprecise ? $"GPU: {_renderer.Gpu.Name} (not precise enough here: CPU)"
             : $"GPU: {_renderer.Gpu.Name} (deep zoom only)";

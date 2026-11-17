@@ -141,47 +141,8 @@ internal sealed class Overlay(ColourState colours) : IDisposable
         }
     }
 
-    private const string HelpText =
-        "NAVIGATION\n" +
-        "  Wheel               Zoom at cursor\n" +
-        "  Left-drag           Pan (only new edges are computed)\n" +
-        "  Arrows / Shift      Pan a step / a big step\n" +
-        "  Middle-click        Center on point\n" +
-        "  + / -               1000 more / fewer iterations\n" +
-        "  A                   Auto iterations on/off (raises the limit when detail is cut off)\n" +
-        "  R / Home            Reset view\n" +
-        "  X                   Deep zoom: auto / always / off\n" +
-        "  Ctrl+C / Ctrl+V     Copy / go to location (full precision, with mapping and density;\n" +
-        "                      a pasted \"Snap\" line zooms in to the spiral centre or minibrot there)\n" +
-        "  N / Shift+N         Snap: find the spiral centre or minibrot here (ask / zoom straight in)\n" +
-        "  Ctrl+click          Snap at the cursor: works on any structure (Ctrl+Shift+click zooms straight in)\n" +
-        "  Space               Pause / resume a snap zoom (while paused, the wheel moves along it)\n" +
-        "  Esc                 Stop a snap zoom\n" +
-        "  L                   Places you've been (click one to go back; kept between sessions)\n" +
-        "  Ctrl+S              Save this place now (otherwise saved after 5 s here, when you move on)\n" +
-        "  Backspace           Back to the last place\n" +
-        "  Delete              Forget this place (removed from the list, not saved when you leave)\n" +
-        "\n" +
-        "COLOUR (instant — no recompute)\n" +
-        "  P                   Palette picker (hover previews)\n" +
-        "  PgUp / PgDn / 1-9   Previous / next / pick palette\n" +
-        "  G                   Generate a random palette\n" +
-        "  S                   Save palette as .map (Documents\\Fractal\\Palettes)\n" +
-        "  C / Shift+C         Toggle cycling / reverse direction\n" +
-        "  , / .               Cycle slower / faster\n" +
-        "  Shift+Wheel         Rotate palette by hand\n" +
-        "  Ctrl+Wheel or [ ]   Colour density\n" +
-        "  M                   Mapping: Linear / Sqrt / Log\n" +
-        "\n" +
-        "ENGINE (re-renders)\n" +
-        "  V                   SIMD on/off (compare render times)\n" +
-        "  U                   GPU on/off for deep zoom (DirectX 12)\n" +
-        "  B / D               Interior fill on/off / show filled areas\n" +
-        "  Q                   Progressive rendering (preview + live fill-in) on/off\n" +
-        "\n" +
-        "WINDOW\n" +
-        "  F11 / Alt+Enter / double-click   Fullscreen (Esc exits)\n" +
-        "  I                   Toggle info      H / F1   Toggle help";
+    /// <summary>The help screen's text (built from the key map).</summary>
+    public string HelpText { get; set; } = "";
 
     private void DrawHelp(Graphics g, Size client)
     {
