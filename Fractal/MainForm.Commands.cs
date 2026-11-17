@@ -90,7 +90,8 @@ public sealed partial class MainForm
             C(Colour, "M", "Mapping: Linear / Sqrt / Log (from the view's floor) / Equalize (equal share of pixels)", NextMapping, Keys.M),
             C(Colour, "F", "Fit: density so the palette runs twice across this view", FitColours, Keys.F),
             C(Colour, "V", "Colour explorer: this view in other colourings (click one to use it)", ShowColourExplorer, Keys.V),
-            C(Colour, "E", "Effects for this image: relief lighting, outlines, mirrored palette", ToggleEffectsPanel, Keys.E),
+            C(Colour, "E", "Effects for this image: relief, outlines, mirror; stripes, angle, binary, boundary\n" +
+                         "and inside-by-period (these compute extra numbers when you ask)", ToggleEffectsPanel, Keys.E),
 
             C(Window, "F11 / Alt+Enter", "Fullscreen (or double-click; Esc exits)", ToggleFullScreen, Keys.F11, Keys.Alt | Keys.Enter),
             C(Window, "I", "Info on/off", () => { _showInfo = !_showInfo; Invalidate(); }, Keys.I),
@@ -243,7 +244,7 @@ public sealed partial class MainForm
         _overlay.PickerOpen = false;
         ClearHover();
         var current = new ColourChoice(_colours.Selected, _colours.Mapping, _colours.Density, _colours.Offset, _colours.Effects);
-        using var dlg = new ColourExplorer(field, _colourScale, current, _colours.Palettes, _colours.MakeRandom, Bounds, _renderer.WorkerCount);
+        using var dlg = new ColourExplorer(field, _colourScale, _extra, current, _colours.Palettes, _colours.MakeRandom, Bounds, _renderer.WorkerCount);
         if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Chosen is not { } c) return;
         _colours.Adopt(c.Palette);
         _colours.Mapping = c.Mapping;
@@ -266,10 +267,13 @@ public sealed partial class MainForm
             _colours.Effects = e;
             TouchPlace();
             Recolor();
+            UpdateExtraStatus();
         };
+        panel.ComputeClicked += compute => { if (compute) ComputeExtra(); else CancelExtra(); };
         panel.FormClosed += (_, _) => { _effectsPanel = null; Activate(); };
         _effectsPanel = panel;
         panel.Show(this);
+        UpdateExtraStatus();
         // Top right of the window, inside it.
         var area = RectangleToScreen(ClientRectangle);
         panel.Location = new Point(area.Right - panel.Width - 16, area.Top + 16);

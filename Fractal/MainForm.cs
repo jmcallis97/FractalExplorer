@@ -153,11 +153,14 @@ public sealed partial class MainForm : Form
         NotePlaceRendered(target);
         _dive.PacedScale = target.View.Scale;
         UpdateColourScale(target);
+        if (_extra != null && _extra.View != target.View) _extra = null; // big; only good for the view it was computed for
         _baseLayer.Field = target;
+        UpdateExtraStatus();
         _previewLayer.Field = null;
         _partialLayer.Field = null;
         Recolor();
         if (_autoIterations) MaybeRaiseIterations(target); // the pipeline then renders the new limit
+        MaybeComputeExtra(target);
     }
 
     private void OnRenderStopped(Field target, Exception? error)
@@ -206,7 +209,7 @@ public sealed partial class MainForm : Form
 
     private void ColorizeLayer(DisplayLayer layer) =>
         layer.Colorize(_colours.Active, _colours.Mapping, _colours.Density, _colours.Offset, _colourScale,
-                       _colours.Effects, _renderer.WorkerCount, _showFilled, filling: layer == _partialLayer);
+                       _colours.Effects, _extra, _renderer.WorkerCount, _showFilled, filling: layer == _partialLayer);
 
     // The floor and spread of the view's values, for the Sqrt, Log and Equalize mappings (see
     // ColourScale). Taken from the first finished render of each new view (a zoom or a jump),
@@ -240,6 +243,7 @@ public sealed partial class MainForm : Form
         }
 
         if (_dive.Active && !_dive.Paused) StepDive(now, dt);
+        if (_extraProgress != null) UpdateExtraStatus();
 
         if (_pipeline.Field != null && _colours.Advance(dt))
         {

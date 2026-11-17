@@ -24,14 +24,17 @@ internal sealed class DisplayLayer : IDisposable
     // palette, density or offset, so it's kept between recolours (colour cycling recolours
     // every frame).
     private float[]? _shade;
-    private (Field Field, Viewport View, ColorMapping Mapping, ColourScale? Scale, Effects Effects)? _shadeKey;
+    private (Field Field, Viewport View, ColorMapping Mapping, ColourScale? Scale, Effects Effects, ExtraField? Extra)? _shadeKey;
 
+    /// <param name="extra">Extra numbers, used if they were computed for exactly this layer's view.</param>
     /// <param name="filling">The field is still being rendered (its values change): don't keep its shading.</param>
     public void Colorize(Palette palette, ColorMapping mapping, double density, double offset,
-                         ColourScale? scale, Effects effects, int workers, bool showFilled, bool filling = false)
+                         ColourScale? scale, Effects effects, ExtraField? extra, int workers, bool showFilled,
+                         bool filling = false)
     {
         if (Field == null) return;
         var v = Field.View;
+        if (extra != null && extra.View != v) extra = null;
         int n = v.Width * v.Height;
         if (_buffer?.Length != n) _buffer = new int[n];
         if (_bitmap == null || _bitmap.Width != v.Width || _bitmap.Height != v.Height)
@@ -43,17 +46,17 @@ internal sealed class DisplayLayer : IDisposable
         float[]? shade = null;
         if (effects.Shades)
         {
-            var key = (Field, v, mapping, scale, effects);
+            var key = (Field, v, mapping, scale, effects, extra);
             if (filling || _shade?.Length != n || _shadeKey != key)
             {
                 if (_shade?.Length != n) _shade = new float[n];
-                effects.ShadeMap(Field, mapping, scale, _shade, workers);
+                effects.ShadeMap(Field, mapping, scale, _shade, workers, extra);
                 _shadeKey = filling ? null : key;
             }
             shade = _shade;
         }
 
-        Colorizer.Colorize(Field, palette, mapping, density, offset, _buffer, workers, showFilled, scale, effects.Mirror, shade);
+        Colorizer.Colorize(Field, palette, mapping, density, offset, _buffer, workers, showFilled, scale, effects, shade, extra);
 
         var data = _bitmap.LockBits(new Rectangle(0, 0, v.Width, v.Height), ImageLockMode.WriteOnly, _bitmap.PixelFormat);
         try

@@ -26,6 +26,7 @@ internal sealed class ColourExplorer : Form
 
     private readonly Field _field;           // the view, sampled down to about twice the tile size
     private readonly ColourScale? _scale;
+    private readonly ExtraField? _extra;     // sampled like _field, if computed for the view
     private readonly IReadOnlyList<Palette> _palettes;
     private readonly Func<Palette> _makeRandom;
     private readonly int _workers;
@@ -37,7 +38,7 @@ internal sealed class ColourExplorer : Form
     private readonly List<(ColourChoice Choice, Bitmap Image)> _tiles = [];
     private int _hover = -1;
 
-    public ColourExplorer(Field field, ColourScale? scale, ColourChoice current, IReadOnlyList<Palette> palettes,
+    public ColourExplorer(Field field, ColourScale? scale, ExtraField? extra, ColourChoice current, IReadOnlyList<Palette> palettes,
                           Func<Palette> makeRandom, Rectangle ownerBounds, int workers)
     {
         _scale = scale;
@@ -66,6 +67,7 @@ internal sealed class ColourExplorer : Form
         Location = new Point(ownerBounds.X + (ownerBounds.Width - Width) / 2, ownerBounds.Y + (ownerBounds.Height - Height) / 2);
 
         _field = Sample(field, Math.Min(field.View.Width, 2 * _tileW));
+        _extra = extra != null && extra.View == field.View ? extra.Sample(_field.View) : null;
         Generate();
     }
 
@@ -116,10 +118,10 @@ internal sealed class ColourExplorer : Form
         if (c.Effects.Shades)
         {
             shade = new float[w * h];
-            c.Effects.ShadeMap(_field, c.Mapping, _scale, shade, _workers);
+            c.Effects.ShadeMap(_field, c.Mapping, _scale, shade, _workers, _extra);
         }
         var px = new int[w * h];
-        Colorizer.Colorize(_field, c.Palette, c.Mapping, c.Density, c.Offset, px, _workers, false, _scale, c.Effects.Mirror, shade);
+        Colorizer.Colorize(_field, c.Palette, c.Mapping, c.Density, c.Offset, px, _workers, false, _scale, c.Effects, shade, _extra);
 
         var full = new Bitmap(w, h, PixelFormat.Format32bppArgb);
         var data = full.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, full.PixelFormat);

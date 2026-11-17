@@ -26,6 +26,7 @@ public sealed partial class MainForm
         _places = PlaceStore.Load(PlaceStore.DefaultFolder, out string? error);
         if (error != null) ShowToast("Couldn't read your places: " + error, 4);
         _view.Moving += OnLeavingPlace;
+        _view.Moving += () => { if (_extraProgress != null || _extraWhenRendered) CancelExtra(); }; // for the view being left
     }
 
     /// <summary>A full render landed: if it shows the current view, the view is now a place (if you stay).</summary>
@@ -183,6 +184,8 @@ public sealed partial class MainForm
         _colours.SetOffset(p.Offset);
         SetEffects(p.Effects ?? Effects.None);
         _arrivalFloor = p.Floor ?? 0; // the floor it was seen with (places from before floors counted from 0)
+        if (p.Effects?.NeedsExtra == true) _extraWhenRendered = true; // saved with effects that need them
+        UpdateExtraStatus();
         Recolor();
         RequestRender();
     }

@@ -133,7 +133,7 @@ public sealed partial class MainForm
             var field = new Field(v, new float[width * height]);
             new MandelbrotRenderer { Gpu = gpu, UseGpu = gpu != null }.Render(field, null, new RenderProgress(), token);
             using var layer = new DisplayLayer { Field = field };
-            layer.Colorize(palette, mapping, density, offset, ColourScale.From(field), effects, workers, false);
+            layer.Colorize(palette, mapping, density, offset, ColourScale.From(field), effects, null, workers, false);
             return layer.CreateThumbnail(width);
         };
     }

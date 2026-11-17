@@ -46,7 +46,11 @@ places history (`%LocalAppData%\Fractal\Places`) as the starter gallery.
   one to use it, right-click for more like it).
 - **Effects** (E), chosen per image and saved with places: relief lighting (the colours as a
   landscape, lit from the side), outlines on fast-changing detail, and a mirrored palette
-  with no seam. They only recolour, so they're instant.
+  with no seam. They only recolour, so they're instant. A second group needs extra numbers per
+  pixel, computed only when you press Compute in the panel (about as long as a CPU render of
+  the view; seconds when shallow, a minute or two at 4K very deep): stripes (stripe average
+  colouring), angle (palette turned by the escape angle), binary decomposition, boundary lines
+  (distance estimate) and the inside coloured by period.
 
 Press **H** in the app for the full list of keys.
 
