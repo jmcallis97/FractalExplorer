@@ -24,6 +24,7 @@ Write-Host "Fractal Explorer $version"
 if (Test-Path $publish) { Remove-Item -Recurse -Force $publish }
 dotnet publish "$root\Fractal\Fractal.csproj" -c Release -r win-x64 --self-contained true -o $publish -p:DebugType=none -p:DebugSymbols=false
 if ($LASTEXITCODE) { throw "dotnet publish failed" }
+Copy-Item "$root\LICENSE" "$publish\LICENSE.txt"
 
 # Starter places: the list plus the thumbnails it refers to (not stray files).
 $list = Join-Path $Places 'places.json'

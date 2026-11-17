@@ -89,3 +89,7 @@ framing the minibrot otherwise), ready for a dive to the limit of the deep-zoom 
 `PerturbationLab` is a console test bench for the deep zoom maths: it checks perturbation
 against brute-force full-precision iteration and the app renderer's deep mode
 (`dotnet run -c Release --project PerturbationLab -- <image folder> [app|diag|probe]`).
+
+## License
+
+MIT. See [LICENSE](LICENSE).
