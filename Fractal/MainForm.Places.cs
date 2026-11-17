@@ -19,6 +19,7 @@ public sealed partial class MainForm
     private PlaceStore _places = null!;
     private double? _placeArrived; // when a full render of the current view landed; null = not at a place yet
     private bool _placeTouched;    // colours changed here
+    private bool _saveWhenRendered; // Ctrl+S before the render had landed
 
     private void LoadPlaces()
     {
@@ -32,6 +33,29 @@ public sealed partial class MainForm
     {
         if (_dive.Active || target.View != _view.Current()) return;
         _placeArrived ??= _clock.Elapsed.TotalSeconds;
+        if (_saveWhenRendered)
+        {
+            _saveWhenRendered = false;
+            if (RecordPlace()) ShowToast("Saved this place (L shows your places)");
+        }
+    }
+
+    /// <summary>
+    /// Ctrl+S: saves the view you're on as a place now, without waiting. If its render is still
+    /// coming, it's saved when the render lands. Moving on later saves it again, which just
+    /// updates the entry with any colour changes made meanwhile.
+    /// </summary>
+    private void SavePlaceNow()
+    {
+        if (_dive.Active) { ShowToast("Stop the zoom first (Esc), then Ctrl+S"); return; }
+        bool ready = !_pipeline.IsRunning && _pipeline.Field?.View == _view.Current();
+        if (ready && RecordPlace())
+        {
+            ShowToast("Saved this place (L shows your places)");
+            return;
+        }
+        _saveWhenRendered = true;
+        ShowToast("Saving this place when the render finishes...", 3);
     }
 
     /// <summary>Colours changed here: that makes it a place without waiting.</summary>
@@ -46,6 +70,7 @@ public sealed partial class MainForm
         bool record = AtPlace;
         _placeArrived = null;
         _placeTouched = false;
+        _saveWhenRendered = false;
         if (record) RecordPlace();
     }
 
@@ -55,12 +80,12 @@ public sealed partial class MainForm
         if (_placeArrived != null) RecordPlace();
     }
 
-    /// <summary>Adds the current view (as on screen now) to the places.</summary>
-    private void RecordPlace()
+    /// <summary>Adds the current view (as on screen now) to the places. False if it isn't on screen or couldn't be saved.</summary>
+    private bool RecordPlace()
     {
         var v = _view.Current();
         var shown = _baseLayer.Field?.View;
-        if (shown is not { } f || !f.SameGrid(v) || f.PanX != v.PanX || f.PanY != v.PanY) return;
+        if (shown is not { } f || !f.SameGrid(v) || f.PanX != v.PanX || f.PanY != v.PanY) return false;
 
         var (x, y) = _view.CenterText(v);
         var palette = _colours.Selected;
@@ -81,10 +106,12 @@ public sealed partial class MainForm
         {
             using var thumb = _baseLayer.CreateThumbnail(ThumbnailWidth);
             _places.Add(place, thumb);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or System.Runtime.InteropServices.ExternalException)
         {
             ShowToast("Couldn't save this place: " + ex.Message, 4);
+            return false;
         }
     }
 

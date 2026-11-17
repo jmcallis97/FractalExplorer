@@ -157,6 +157,7 @@ internal sealed class Overlay(ColourState colours) : IDisposable
         "  Ctrl+click          Snap at the cursor: works on any structure (Ctrl+Shift+click zooms straight in)\n" +
         "  Esc                 Stop a snap zoom\n" +
         "  L                   Places you've been (click one to go back; kept between sessions)\n" +
+        "  Ctrl+S              Save this place now (otherwise saved after 5 s here, when you move on)\n" +
         "  Backspace           Back to the last place\n" +
         "  Delete              Forget this place (removed from the list, not saved when you leave)\n" +
         "\n" +

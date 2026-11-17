@@ -239,6 +239,9 @@ public sealed partial class MainForm
             case Keys.Delete:
                 ForgetPlace();
                 return true;
+            case Keys.Control | Keys.S:
+                SavePlaceNow();
+                return true;
             case Keys.Shift | Keys.N:
                 StartSnap(ask: false);
                 return true;
