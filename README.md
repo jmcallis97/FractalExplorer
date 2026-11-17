@@ -2,6 +2,20 @@
 
 A fast, interactive Mandelbrot set explorer for Windows (C# / .NET 10, WinForms).
 
+## Install
+
+Download `FractalExplorer-Setup-<version>.exe` from the
+[latest release](https://github.com/jmcallis97/FractalExplorer/releases/latest) and run it. It
+installs in a few seconds, without needing admin rights or .NET, and adds Start menu and desktop
+shortcuts. Your gallery of places starts with a collection of places to visit (press **L**).
+
+The installer isn't signed, so Windows may say "Windows protected your PC": click
+**More info**, then **Run anyway**. Uninstall it from Settings → Apps.
+
+To build the installer yourself, install [Inno Setup 6](https://jrsoftware.org/isinfo.php)
+(`winget install JRSoftware.InnoSetup`) and run `tools\build_installer.ps1`. It ships your own
+places history (`%LocalAppData%\Fractal\Places`) as the starter gallery.
+
 ## Features
 
 - **Smooth zoom** with the mouse wheel, centred on the cursor

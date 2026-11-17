@@ -75,6 +75,7 @@ internal sealed class PlaceStore
         try
         {
             string path = Path.Combine(folder, "places.json");
+            if (!File.Exists(path)) CopyStarterPlaces(folder);
             if (File.Exists(path))
                 places = JsonSerializer.Deserialize<List<Place>>(File.ReadAllText(path), Json) ?? [];
             // Drop anything that wouldn't parse as a location (a hand-edited or damaged file).
@@ -87,6 +88,23 @@ internal sealed class PlaceStore
             places = [];
         }
         return new PlaceStore(folder, places);
+    }
+
+    /// <summary>The places installed with the app (Setup.exe ships a gallery), next to the exe.</summary>
+    public static string StarterFolder => Path.Combine(AppContext.BaseDirectory, "StarterPlaces");
+
+    /// <summary>
+    /// First run: starts the gallery with the places that came with the app, if any. Only when
+    /// there's no list yet, so an existing history is never overwritten (reinstalls, upgrades).
+    /// </summary>
+    private static void CopyStarterPlaces(string folder)
+    {
+        string from = StarterFolder;
+        if (!File.Exists(Path.Combine(from, "places.json"))) return;
+        Directory.CreateDirectory(folder);
+        foreach (var png in Directory.EnumerateFiles(from, "*.png"))
+            File.Copy(png, Path.Combine(folder, Path.GetFileName(png)), overwrite: true);
+        File.Copy(Path.Combine(from, "places.json"), Path.Combine(folder, "places.json")); // last: marks the copy complete
     }
 
     /// <summary>

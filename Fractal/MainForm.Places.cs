@@ -61,9 +61,13 @@ public sealed partial class MainForm
     /// <summary>Colours changed here: that makes it a place without waiting.</summary>
     private void TouchPlace() => _placeTouched = true;
 
-    /// <summary>True once the current view counts as a place.</summary>
+    /// <summary>
+    /// True once the current view counts as a place. Waiting doesn't make the whole set (zoom
+    /// below 2, the opening view) a place, or every session would start by adding it; changing
+    /// its colours or Ctrl+S still does.
+    /// </summary>
     private bool AtPlace =>
-        _placeArrived is double t && (_placeTouched || _clock.Elapsed.TotalSeconds - t >= PlaceDwellSeconds);
+        _placeArrived is double t && (_placeTouched || (_clock.Elapsed.TotalSeconds - t >= PlaceDwellSeconds && _view.Zoom >= 2));
 
     private void OnLeavingPlace()
     {
@@ -77,7 +81,7 @@ public sealed partial class MainForm
     /// <summary>On closing: the view you're on is kept, however briefly you were there.</summary>
     private void RecordPlaceOnClose()
     {
-        if (_placeArrived != null) RecordPlace();
+        if (_placeArrived != null && (_placeTouched || _view.Zoom >= 2)) RecordPlace();
     }
 
     /// <summary>Adds the current view (as on screen now) to the places. False if it isn't on screen or couldn't be saved.</summary>
