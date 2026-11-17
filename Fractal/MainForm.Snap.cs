@@ -114,6 +114,7 @@ public sealed partial class MainForm
         var palette = _colours.Active;
         var mapping = _colours.Mapping;
         double density = _colours.Density, offset = _colours.Offset;
+        var effects = _colours.Effects;
         var gpu = _renderer.UseGpu ? _renderer.Gpu : null;
         int workers = _renderer.WorkerCount;
 
@@ -132,7 +133,7 @@ public sealed partial class MainForm
             var field = new Field(v, new float[width * height]);
             new MandelbrotRenderer { Gpu = gpu, UseGpu = gpu != null }.Render(field, null, new RenderProgress(), token);
             using var layer = new DisplayLayer { Field = field };
-            layer.Colorize(palette, mapping, density, offset, workers, false);
+            layer.Colorize(palette, mapping, density, offset, ColourScale.From(field), effects, workers, false);
             return layer.CreateThumbnail(width);
         };
     }

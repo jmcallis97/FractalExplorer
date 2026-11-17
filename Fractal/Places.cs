@@ -24,6 +24,16 @@ internal sealed class Place
     public ColorMapping Mapping { get; set; }
     public double Density { get; set; } = 1;
     public double Offset { get; set; }
+
+    /// <summary>
+    /// The view's floor when it was saved (where Sqrt and Log count from), so it looks the same
+    /// when you come back. Null for places saved before there was one: they counted from 0.
+    /// </summary>
+    public double? Floor { get; set; }
+
+    /// <summary>Relief, outline, mirror; null for none.</summary>
+    public Effects? Effects { get; set; }
+
     public DateTime Visited { get; set; }
 
     /// <summary>Pinned places are never dropped to make room.</summary>

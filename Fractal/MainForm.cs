@@ -152,6 +152,7 @@ public sealed partial class MainForm : Form
     {
         NotePlaceRendered(target);
         _dive.PacedScale = target.View.Scale;
+        UpdateColourScale(target);
         _baseLayer.Field = target;
         _previewLayer.Field = null;
         _partialLayer.Field = null;
@@ -204,8 +205,23 @@ public sealed partial class MainForm : Form
     }
 
     private void ColorizeLayer(DisplayLayer layer) =>
-        layer.Colorize(_colours.Active, _colours.Mapping, _colours.Density, _colours.Offset,
-                       _renderer.WorkerCount, _showFilled);
+        layer.Colorize(_colours.Active, _colours.Mapping, _colours.Density, _colours.Offset, _colourScale,
+                       _colours.Effects, _renderer.WorkerCount, _showFilled, filling: layer == _partialLayer);
+
+    // The floor and spread of the view's values, for the Sqrt, Log and Equalize mappings (see
+    // ColourScale). Taken from the first finished render of each new view (a zoom or a jump),
+    // then kept while you pan or change iterations, so colours don't shift under you.
+    private ColourScale? _colourScale;
+    private Viewport? _colourScaleView;
+    private double? _arrivalFloor; // a place's saved floor, for when its render lands
+
+    private void UpdateColourScale(Field target)
+    {
+        if (_colourScale != null && _colourScaleView is { } v && v.SameGrid(target.View) && _arrivalFloor == null) return;
+        _colourScale = ColourScale.From(target, _arrivalFloor);
+        _colourScaleView = target.View;
+        _arrivalFloor = null;
+    }
 
     private void OnTick(object? sender, EventArgs e)
     {
@@ -286,7 +302,7 @@ public sealed partial class MainForm : Form
                     : $"Zooming in to {Mandelbrot.ZoomFor(target, ClientSize.Width):G3}x (Space pauses, Esc stops)\n"
                 : "") +
             $"{EngineText(v)}   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}{(_pipeline.Progressive ? "+Prog" : "")}   {status} ({_pipeline.LastRenderPixels:N0} px rendered)\n" +
-            $"Palette: {_colours.Active.Name}   Mapping: {_colours.Mapping}   Density: {_colours.Density:0.##}x   Cycling: {(_colours.Cycling ? $"{_colours.CycleSpeed:0.##}/s" : "off")}\n" +
+            $"Palette: {_colours.Active.Name}   Mapping: {_colours.Mapping}   Density: {_colours.Density:G3}x   Effects: {_colours.Effects}   Cycling: {(_colours.Cycling ? $"{_colours.CycleSpeed:0.##}/s" : "off")}\n" +
             "H: help   P: palettes   L: places   I: hide info";
     }
 

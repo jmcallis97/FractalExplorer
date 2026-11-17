@@ -75,7 +75,27 @@ internal sealed class ColourState
         return true;
     }
 
-    public void SetDensity(double density) => Density = Math.Clamp(density, 0.01, 100);
+    /// <summary>Relief, outline and mirror (E): off unless chosen for an image.</summary>
+    public Effects Effects { get; set; } = Effects.None;
+
+    /// <summary>Adds a palette made elsewhere (the colour explorer's new ones) as a generated one, and selects it.</summary>
+    public void Adopt(Palette p)
+    {
+        int i = _palettes.IndexOf(p);
+        if (i < 0)
+        {
+            _palettes.Add(p);
+            _generated.Add(p);
+            i = _palettes.Count - 1;
+        }
+        Select(i);
+    }
+
+    /// <summary>A new random palette, not yet in the list (see <see cref="Adopt"/>).</summary>
+    public Palette MakeRandom() => Palette.Random(_rng, ++_randomCount);
+
+    // Deep views with Linear mapping want tiny densities (the palette spans thousands of iterations).
+    public void SetDensity(double density) => Density = Math.Clamp(density, 1e-5, 1000);
 
     public void SetOffset(double cycles)
     {

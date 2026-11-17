@@ -39,6 +39,14 @@ places history (`%LocalAppData%\Fractal\Places`) as the starter gallery.
   where to stop) does the same after going there.
 - **Palettes**: 12 built-ins, random palette generator, live hover preview, animated colour
   cycling, Fractint `.map` import/export
+- **Colour mapping** (M): Linear; Sqrt and Log, which count from the view's floor (deep down
+  every pixel takes tens of thousands of iterations, so counting from 0 drowns the detail);
+  and Equalize, which gives each colour an equal share of the pixels. **F** fits the density to
+  the view. **V** opens the colour explorer: the view in 16 other colourings at once (click
+  one to use it, right-click for more like it).
+- **Effects** (E), chosen per image and saved with places: relief lighting (the colours as a
+  landscape, lit from the side), outlines on fast-changing detail, and a mirrored palette
+  with no seam. They only recolour, so they're instant.
 
 Press **H** in the app for the full list of keys.
 

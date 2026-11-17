@@ -87,7 +87,10 @@ public sealed partial class MainForm
             Mouse(Colour, "Shift+Wheel", "Rotate the palette by hand"),
             C(Colour, "Ctrl+Wheel or [ ]", "Colour density", () => ChangeDensity(1 / 1.25), Keys.OemOpenBrackets),
             C(Colour, "", "", () => ChangeDensity(1.25), Keys.OemCloseBrackets),
-            C(Colour, "M", "Mapping: Linear / Sqrt / Log", NextMapping, Keys.M),
+            C(Colour, "M", "Mapping: Linear / Sqrt / Log (from the view's floor) / Equalize (equal share of pixels)", NextMapping, Keys.M),
+            C(Colour, "F", "Fit: density so the palette runs twice across this view", FitColours, Keys.F),
+            C(Colour, "V", "Colour explorer: this view in other colourings (click one to use it)", ShowColourExplorer, Keys.V),
+            C(Colour, "E", "Effects for this image: relief lighting, outlines, mirrored palette", ToggleEffectsPanel, Keys.E),
 
             C(Window, "F11 / Alt+Enter", "Fullscreen (or double-click; Esc exits)", ToggleFullScreen, Keys.F11, Keys.Alt | Keys.Enter),
             C(Window, "I", "Info on/off", () => { _showInfo = !_showInfo; Invalidate(); }, Keys.I),
@@ -222,6 +225,61 @@ public sealed partial class MainForm
         TouchPlace();
         ShowToast($"Colour mapping: {_colours.Mapping}");
         Recolor();
+    }
+
+    private void FitColours()
+    {
+        if (_colourScale == null) { ShowToast("Nothing to fit yet: wait for the render"); return; }
+        if (Colorizer.FitDensity(_colours.Mapping, _colourScale) is not double d) { ShowToast("This view is all one value: nothing to fit"); return; }
+        _colours.SetDensity(d);
+        TouchPlace();
+        ShowToast($"Fitted: density {_colours.Density:G3}x");
+        Recolor();
+    }
+
+    private void ShowColourExplorer()
+    {
+        if (_baseLayer.Field is not { } field) { ShowToast("Wait for the render, then V"); return; }
+        _overlay.PickerOpen = false;
+        ClearHover();
+        var current = new ColourChoice(_colours.Selected, _colours.Mapping, _colours.Density, _colours.Offset, _colours.Effects);
+        using var dlg = new ColourExplorer(field, _colourScale, current, _colours.Palettes, _colours.MakeRandom, Bounds, _renderer.WorkerCount);
+        if (dlg.ShowDialog(this) != DialogResult.OK || dlg.Chosen is not { } c) return;
+        _colours.Adopt(c.Palette);
+        _colours.Mapping = c.Mapping;
+        _colours.SetDensity(c.Density);
+        _colours.SetOffset(c.Offset);
+        SetEffects(c.Effects);
+        TouchPlace();
+        ShowToast(c.Label, 3);
+        Recolor();
+    }
+
+    private EffectsPanel? _effectsPanel;
+
+    private void ToggleEffectsPanel()
+    {
+        if (_effectsPanel != null) { _effectsPanel.Close(); return; }
+        var panel = new EffectsPanel(_colours.Effects);
+        panel.Changed += e =>
+        {
+            _colours.Effects = e;
+            TouchPlace();
+            Recolor();
+        };
+        panel.FormClosed += (_, _) => { _effectsPanel = null; Activate(); };
+        _effectsPanel = panel;
+        panel.Show(this);
+        // Top right of the window, inside it.
+        var area = RectangleToScreen(ClientRectangle);
+        panel.Location = new Point(area.Right - panel.Width - 16, area.Top + 16);
+    }
+
+    /// <summary>Changes the effects (from a place or the explorer), keeping an open Effects panel in step.</summary>
+    private void SetEffects(Effects e)
+    {
+        _colours.Effects = e;
+        _effectsPanel?.SetEffects(e);
     }
 
     private void ToggleGpu()

@@ -104,6 +104,8 @@ public sealed partial class MainForm
             Mapping = _colours.Mapping,
             Density = _colours.Density,
             Offset = _colours.Offset,
+            Floor = _colourScale?.Floor,
+            Effects = _colours.Effects.Any ? _colours.Effects : null,
             Visited = DateTime.UtcNow,
         };
         try
@@ -179,6 +181,8 @@ public sealed partial class MainForm
         _colours.Mapping = p.Mapping;
         _colours.SetDensity(p.Density);
         _colours.SetOffset(p.Offset);
+        SetEffects(p.Effects ?? Effects.None);
+        _arrivalFloor = p.Floor ?? 0; // the floor it was seen with (places from before floors counted from 0)
         Recolor();
         RequestRender();
     }

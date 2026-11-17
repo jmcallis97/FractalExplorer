@@ -20,8 +20,15 @@ internal sealed class DisplayLayer : IDisposable
     /// <summary>Upscale with bilinear filtering (soft) rather than nearest neighbour (blocky).</summary>
     public bool SmoothUpscale { get; init; }
 
+    // Relief and outline shading depends only on the values, mapping, scale and effects, not on
+    // palette, density or offset, so it's kept between recolours (colour cycling recolours
+    // every frame).
+    private float[]? _shade;
+    private (Field Field, Viewport View, ColorMapping Mapping, ColourScale? Scale, Effects Effects)? _shadeKey;
+
+    /// <param name="filling">The field is still being rendered (its values change): don't keep its shading.</param>
     public void Colorize(Palette palette, ColorMapping mapping, double density, double offset,
-                         int workers, bool showFilled)
+                         ColourScale? scale, Effects effects, int workers, bool showFilled, bool filling = false)
     {
         if (Field == null) return;
         var v = Field.View;
@@ -33,7 +40,20 @@ internal sealed class DisplayLayer : IDisposable
             _bitmap = new Bitmap(v.Width, v.Height, PixelFormat.Format32bppPArgb);
         }
 
-        Colorizer.Colorize(Field, palette, mapping, density, offset, _buffer, workers, showFilled);
+        float[]? shade = null;
+        if (effects.Shades)
+        {
+            var key = (Field, v, mapping, scale, effects);
+            if (filling || _shade?.Length != n || _shadeKey != key)
+            {
+                if (_shade?.Length != n) _shade = new float[n];
+                effects.ShadeMap(Field, mapping, scale, _shade, workers);
+                _shadeKey = filling ? null : key;
+            }
+            shade = _shade;
+        }
+
+        Colorizer.Colorize(Field, palette, mapping, density, offset, _buffer, workers, showFilled, scale, effects.Mirror, shade);
 
         var data = _bitmap.LockBits(new Rectangle(0, 0, v.Width, v.Height), ImageLockMode.WriteOnly, _bitmap.PixelFormat);
         try
