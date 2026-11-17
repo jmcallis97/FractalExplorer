@@ -292,6 +292,7 @@ public sealed partial class MainForm : Form
             : _renderer.Gpu == null ? $"GPU: {_gpuStatus}"
             : !_renderer.UseGpu ? "GPU: off (U)"
             : v.Deep != null && _renderer.LastRenderUsedGpu ? $"GPU: {_renderer.Gpu.Name}"
+            : v.Deep != null && _renderer.LastRenderGpuImprecise ? $"GPU: {_renderer.Gpu.Name} (not precise enough here: CPU)"
             : $"GPU: {_renderer.Gpu.Name} (deep zoom only)";
         return $"{cpu}   {gpu}";
     }

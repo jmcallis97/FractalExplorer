@@ -63,6 +63,9 @@ public sealed class MandelbrotRenderer
     /// <summary>True if the last deep render ran on the GPU.</summary>
     public bool LastRenderUsedGpu { get; private set; }
 
+    /// <summary>True if the last deep render ran on the CPU because the GPU wasn't precise enough for it.</summary>
+    public bool LastRenderGpuImprecise { get; private set; }
+
     private readonly struct Job(float[] dst, Viewport view, bool simd, bool fill, RenderProgress progress,
                                 ReferenceOrbit? orbit)
     {
@@ -183,13 +186,18 @@ public sealed class MandelbrotRenderer
         Array.Sort(distance, order);
 
         LastRenderUsedGpu = false;
+        LastRenderGpuImprecise = false;
         if (orbit != null && UseGpu && Gpu is { } gpu && GpuDeep.CanRender(v))
         {
             try
             {
-                RenderOnGpu(gpu, job, order, tilesX, tx0, ty0, token);
-                LastRenderUsedGpu = true;
-                return;
+                if (GpuPreciseEnough(gpu, job, options))
+                {
+                    RenderOnGpu(gpu, job, order, tilesX, tx0, ty0, token);
+                    LastRenderUsedGpu = true;
+                    return;
+                }
+                LastRenderGpuImprecise = true;
             }
             catch (OperationCanceledException) { throw; }
             catch (Exception ex)
@@ -228,6 +236,67 @@ public sealed class MandelbrotRenderer
         });
 
         token.ThrowIfCancellationRequested();
+    }
+
+    // GPU precision check: a grid of sample pixels, each compared with the CPU.
+    private const int CheckColumns = 16, CheckRows = 9;
+    private const double MaxImpreciseFraction = 0.05;
+
+    /// <summary>
+    /// The GPU iterates in single precision, which is plenty for most deep views but not all:
+    /// near a minibrot whose reference orbit comes within ~1e-36 of zero (a period-252 one at
+    /// 1e72, say), float rounding throws whole regions off and they render as flat shards. So
+    /// before each GPU render a grid of sample pixels is computed on both, and the view goes to
+    /// the CPU (double precision) if more than <see cref="MaxImpreciseFraction"/> of them
+    /// disagree by more than the difference to their neighbours (in chaotic dust, neighbouring
+    /// pixels differ by hundreds of iterations and so may the GPU: that is noise either way).
+    /// Costs a few hundred CPU pixels, a few milliseconds.
+    /// </summary>
+    private bool GpuPreciseEnough(GpuDeep gpu, in Job job, ParallelOptions options)
+    {
+        var v = job.View;
+        var orbit = job.Orbit!;
+        int w = v.Width, h = v.Height;
+        if (w < 2 || h < 2) return true;
+
+        // Each sample has a right and a lower neighbour (x < w - 1, y < h - 1).
+        var samples = new int[CheckColumns * CheckRows];
+        for (int r = 0, k = 0; r < CheckRows; r++)
+            for (int c = 0; c < CheckColumns; c++, k++)
+                samples[k] = (int)((r + 0.5) * (h - 1) / CheckRows) * w + (int)((c + 0.5) * (w - 1) / CheckColumns);
+
+        float[] gpuValues = ArrayPool<float>.Shared.Rent(w * h);
+        try
+        {
+            gpu.Compute(orbit, v, samples, gpuValues, null, options.CancellationToken);
+
+            float Cpu(int idx)
+            {
+                int py = idx / w, px = idx - py * w;
+                return Perturbation.Iterate(orbit, (v.OriginX + px) * v.Scale, -((v.OriginY + py) * v.Scale), v.MaxIterations);
+            }
+
+            int bad = 0;
+            Parallel.ForEach(samples, options, idx =>
+            {
+                float c = Cpu(idx), g = gpuValues[idx];
+                bool off;
+                if (c < 0 || g < 0) off = (c < 0) != (g < 0);
+                else
+                {
+                    float spread = 1;
+                    foreach (int n in (ReadOnlySpan<int>)[idx + 1, idx + w])
+                        if (Cpu(n) is var cn and >= 0) spread = Math.Max(spread, Math.Abs(cn - c));
+                    off = Math.Abs(g - c) > spread;
+                }
+                if (off) Interlocked.Increment(ref bad);
+            });
+            return bad <= MaxImpreciseFraction * samples.Length;
+        }
+        finally
+        {
+            ArrayPool<float>.Shared.Return(gpuValues);
+        }
     }
 
     /// <summary>
