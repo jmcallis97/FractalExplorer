@@ -31,7 +31,8 @@ $list = Join-Path $Places 'places.json'
 if (Test-Path $list) {
     $starter = Join-Path $publish 'StarterPlaces'
     New-Item -ItemType Directory -Force $starter | Out-Null
-    $entries = @(Get-Content $list -Raw | ConvertFrom-Json)
+    # ForEach-Object unrolls the array (Windows PowerShell 5.1 passes it on as one object).
+    $entries = @(Get-Content $list -Raw | ConvertFrom-Json | ForEach-Object { $_ })
     Copy-Item $list $starter
     $missing = 0
     foreach ($p in $entries) {
