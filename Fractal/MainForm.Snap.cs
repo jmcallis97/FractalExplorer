@@ -63,7 +63,8 @@ public sealed partial class MainForm
         {
             _overlay.ClearToast();
             Invalidate();
-            using var dlg = new SnapDialog(Snap.Describe(r), r.DistanceInViews, zoom, _dive.SecondsPerDoubling);
+            using var dlg = new SnapDialog(Snap.Describe(r), r.DistanceInViews, zoom, _dive.SecondsPerDoubling,
+                                           SnapPreview(r), (double)ClientSize.Height / Math.Max(1, ClientSize.Width));
             if (dlg.ShowDialog(this) != DialogResult.OK) return;
             choice = dlg.Result;
             zoom = dlg.TargetZoom;
@@ -97,6 +98,45 @@ public sealed partial class MainForm
         }
     }
 
+    /// <summary>
+    /// Renders the snapped point as the window would show it at a given zoom, small, in the
+    /// current colours and with the iteration limit the dive would use there, so you can see
+    /// where a long zoom ends before setting off. Everything it needs is captured now; the
+    /// returned function runs on a worker thread.
+    /// </summary>
+    private Func<double, CancellationToken, Bitmap?> SnapPreview(Snap.Result r)
+    {
+        const int width = 560;
+        int clientW = Math.Max(1, ClientSize.Width), clientH = Math.Max(1, ClientSize.Height);
+        int height = Math.Max(1, (int)Math.Round((double)width * clientH / clientW));
+        int boost = _view.IterationBoost;
+        bool deepOff = _view.DeepMode == DeepMode.Off;
+        var palette = _colours.Active;
+        var mapping = _colours.Mapping;
+        double density = _colours.Density, offset = _colours.Offset;
+        var gpu = _renderer.UseGpu ? _renderer.Gpu : null;
+        int workers = _renderer.WorkerCount;
+
+        return (zoom, token) =>
+        {
+            // Same framing as the window: the window's pixel size there, times how much smaller the preview is.
+            double scale = Mandelbrot.ClampedScaleFor(zoom, clientW) * clientW / width;
+            int iterations = Mandelbrot.Iterations(zoom, boost);
+            if (r.Kind == Snap.Kind.Nucleus) iterations = (int)Math.Max(iterations, Math.Min(20L * r.Period, AutoIterationCap));
+            bool deep = !deepOff && Mandelbrot.ClampedScaleFor(zoom, clientW) < Mandelbrot.DeepThreshold;
+            int bits = BigFixed.BitsFor(scale / 1024);
+            var x = r.Re.WithBits(bits);
+            var y = r.Im.WithBits(bits);
+            var v = new Viewport(x.ToDouble(), y.ToDouble(), scale, 0, 0, width, height, iterations,
+                                 deep ? new DeepAnchor(x, y) : null);
+            var field = new Field(v, new float[width * height]);
+            new MandelbrotRenderer { Gpu = gpu, UseGpu = gpu != null }.Render(field, null, new RenderProgress(), token);
+            using var layer = new DisplayLayer { Field = field };
+            layer.Colorize(palette, mapping, density, offset, workers, false);
+            return layer.CreateThumbnail(width);
+        };
+    }
+
     private void StepDive(double now, double dt)
     {
         if (_dive.Step(now, dt))
@@ -107,6 +147,21 @@ public sealed partial class MainForm
         }
         // Start the next render as soon as the last one is done; never cancel one mid-dive.
         if (WantedView() is { } want) _pipeline.StartIfIdle(want);
+        Invalidate();
+    }
+
+    /// <summary>Holds the dive where it is, so the view renders in full (and can be saved, or moved along the way with the wheel).</summary>
+    private void PauseDive()
+    {
+        _dive.Pause(_clock.Elapsed.TotalSeconds);
+        ShowToast($"Paused at {_view.Zoom:G3}x: Space goes on, the wheel moves along the way, Ctrl+S saves this place", 4);
+        RequestRender();
+    }
+
+    private void ResumeDive()
+    {
+        _dive.Resume(_clock.Elapsed.TotalSeconds);
+        ShowToast("Zooming on (Space pauses)");
         Invalidate();
     }
 

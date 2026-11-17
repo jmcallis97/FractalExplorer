@@ -222,7 +222,7 @@ public sealed partial class MainForm : Form
             _lastPartialRefresh = now;
         }
 
-        if (_dive.Active) StepDive(now, dt);
+        if (_dive.Active && !_dive.Paused) StepDive(now, dt);
 
         if (_pipeline.Field != null && _colours.Advance(dt))
         {
@@ -279,7 +279,11 @@ public sealed partial class MainForm : Form
         return
             $"Center: {Clip(cx)}, {Clip(cy)}\n" +
             $"Zoom: {_view.Zoom:G4}x   Iterations: {_view.MaxIterations}   {precision}\n" +
-            (_dive.TargetScale is double target ? $"Zooming in to {Mandelbrot.ZoomFor(target, ClientSize.Width):G3}x (Esc stops)\n" : "") +
+            (_dive.TargetScale is double target
+                ? _dive.Paused
+                    ? $"Zoom to {Mandelbrot.ZoomFor(target, ClientSize.Width):G3}x paused: Space goes on, the wheel moves along the way, Ctrl+S saves, Esc stops\n"
+                    : $"Zooming in to {Mandelbrot.ZoomFor(target, ClientSize.Width):G3}x (Space pauses, Esc stops)\n"
+                : "") +
             $"{EngineText(v)}   {(_renderer.UseSimd ? "SIMD" : "Scalar")}{(_renderer.UseInteriorFill ? "+Fill" : "")}{(_pipeline.Progressive ? "+Prog" : "")}   {status} ({_pipeline.LastRenderPixels:N0} px rendered)\n" +
             $"Palette: {_colours.Active.Name}   Mapping: {_colours.Mapping}   Density: {_colours.Density:0.##}x   Cycling: {(_colours.Cycling ? $"{_colours.CycleSpeed:0.##}/s" : "off")}\n" +
             "H: help   P: palettes   L: places   I: hide info";

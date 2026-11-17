@@ -31,7 +31,7 @@ public sealed partial class MainForm
     /// <summary>A full render landed: if it shows the current view, the view is now a place (if you stay).</summary>
     private void NotePlaceRendered(Field target)
     {
-        if (_dive.Active || target.View != _view.Current()) return;
+        if ((_dive.Active && !_dive.Paused) || target.View != _view.Current()) return;
         _placeArrived ??= _clock.Elapsed.TotalSeconds;
         if (_saveWhenRendered)
         {
@@ -47,7 +47,7 @@ public sealed partial class MainForm
     /// </summary>
     private void SavePlaceNow()
     {
-        if (_dive.Active) { ShowToast("Stop the zoom first (Esc), then Ctrl+S"); return; }
+        if (_dive.Active && !_dive.Paused) PauseDive(); // saved once the paused view has rendered
         bool ready = !_pipeline.IsRunning && _pipeline.Field?.View == _view.Current();
         if (ready && RecordPlace())
         {

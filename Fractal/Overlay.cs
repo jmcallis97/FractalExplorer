@@ -155,6 +155,7 @@ internal sealed class Overlay(ColourState colours) : IDisposable
         "                      a pasted \"Snap\" line zooms in to the spiral centre or minibrot there)\n" +
         "  N / Shift+N         Snap: find the spiral centre or minibrot here (ask / zoom straight in)\n" +
         "  Ctrl+click          Snap at the cursor: works on any structure (Ctrl+Shift+click zooms straight in)\n" +
+        "  Space               Pause / resume a snap zoom (while paused, the wheel moves along it)\n" +
         "  Esc                 Stop a snap zoom\n" +
         "  L                   Places you've been (click one to go back; kept between sessions)\n" +
         "  Ctrl+S              Save this place now (otherwise saved after 5 s here, when you move on)\n" +

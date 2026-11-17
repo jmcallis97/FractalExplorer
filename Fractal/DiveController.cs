@@ -19,8 +19,12 @@ internal sealed class DiveController(ViewState view)
 
     private Dive? _dive;
     private int _anchorBits;
+    private double? _pausedAt;
 
     public bool Active => _dive != null;
+
+    /// <summary>The dive is on hold: the view stays put (and renders in full) until <see cref="Resume"/>.</summary>
+    public bool Paused => _pausedAt != null;
 
     /// <summary>Pixel size the dive is heading for, or null when not diving.</summary>
     public double? TargetScale => _dive?.TargetScale;
@@ -39,6 +43,7 @@ internal sealed class DiveController(ViewState view)
         double px = (view.AnchorX.WithBits(bits) - x.WithBits(bits)).ToDouble() / v.Scale + v.PanX;
         double py = (y.WithBits(bits) - view.AnchorY.WithBits(bits)).ToDouble() / v.Scale + v.PanY;
         _dive = new Dive(x, y, targetScale, SecondsPerDoubling, px, py, now);
+        _pausedAt = null;
         PacedScale = shownScale;
         _anchorBits = -1;
         Apply(v.Scale, px, py);
@@ -49,7 +54,34 @@ internal sealed class DiveController(ViewState view)
     {
         if (_dive == null) return false;
         _dive = null;
+        _pausedAt = null;
         return true;
+    }
+
+    public void Pause(double now)
+    {
+        if (_dive != null) _pausedAt ??= now;
+    }
+
+    /// <summary>Goes on from wherever the view is now (the centre's glide picks up where it left off).</summary>
+    public void Resume(double now)
+    {
+        if (_pausedAt is not double t || _dive == null) return;
+        _dive = _dive with { Started = _dive.Started + (now - t) };
+        _pausedAt = null;
+    }
+
+    /// <summary>
+    /// While paused: zooms by <paramref name="factor"/> (above 1 = in) along the dive's path, about
+    /// the dive's point, so a view passed on the way can be found again. Never past the target.
+    /// </summary>
+    public void MoveAlong(double factor)
+    {
+        var d = _dive!;
+        double scale = view.Scale / factor;
+        if ((scale - d.TargetScale) * (view.Scale - d.TargetScale) < 0) scale = d.TargetScale;
+        scale = Math.Min(scale, view.ScaleForZoom(Mandelbrot.MinZoom));
+        Apply(scale, view.PanX, view.PanY);
     }
 
     /// <summary>Moves the view on by <paramref name="dt"/> seconds. True once it has arrived (the dive is then over).</summary>

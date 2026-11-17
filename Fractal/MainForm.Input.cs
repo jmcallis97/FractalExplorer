@@ -41,6 +41,12 @@ public sealed partial class MainForm
             return;
         }
 
+        if (_dive.Paused)
+        {
+            _dive.MoveAlong(Math.Pow(ZoomPerNotch, notches));
+            RequestRender();
+            return;
+        }
         StopDive();
         bool wasDeep = _view.UseDeep;
         _view.ZoomAt(e.Location, Math.Pow(ZoomPerNotch, notches));
@@ -163,6 +169,10 @@ public sealed partial class MainForm
                 else if (_showHelp) _showHelp = false;
                 else if (_fullScreen) ToggleFullScreen();
                 Invalidate();
+                return true;
+            case Keys.Space:
+                if (_dive.Paused) ResumeDive();
+                else if (_dive.Active) PauseDive();
                 return true;
             case Keys.A:
                 _autoIterations = !_autoIterations;
