@@ -6,7 +6,13 @@
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
+    <!-- The whole set, rendered by tools/make_icon.py. -->
+    <ApplicationIcon>Assets/fractal.ico</ApplicationIcon>
   </PropertyGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets/fractal.ico" LogicalName="Fractal.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Fractal.Core\Fractal.Core.csproj" />

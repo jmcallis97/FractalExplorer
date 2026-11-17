@@ -48,6 +48,7 @@ public sealed partial class MainForm : Form
     public MainForm(string? startLocation = null)
     {
         Text = "Mandelbrot";
+        Icon = AppIcon.Get();
         ClientSize = new Size(1280, 800);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = Color.Black;

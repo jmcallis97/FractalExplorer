@@ -27,6 +27,7 @@ internal sealed class PlacesDialog : Form
     {
         _store = store;
         Text = "Places you've been";
+        Icon = AppIcon.Get();
         BackColor = Color.FromArgb(14, 14, 18);
         ForeColor = Color.Gainsboro;
         Font = new Font("Segoe UI", 9.5f);
