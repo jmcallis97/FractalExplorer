@@ -26,10 +26,11 @@ A fast, interactive Mandelbrot set explorer for Windows (C# / .NET 10, WinForms)
 Press **H** in the app for the full list of keys.
 
 **Places you've been:** a view counts as a place once you stay on it for 5 seconds, or change its
-colours. When you move on, it's added to a list of up to 30 places, with its palette, mapping,
-density and iteration limit, and a thumbnail of what was on screen. Press **L** to see them and
-click one to go back; right-click a place to pin, copy or delete it. **Backspace** goes back to
-the last place. The list is kept between sessions in `%LocalAppData%\Fractal\Places`, or in the
+colours. When you move on, it's added to a list of up to 100 places, with its palette, mapping,
+density and iteration limit, and a thumbnail of what was on screen. Press **L** for the gallery:
+click a place to go back; the × on a hovered place (or Delete) removes it, and Ctrl+Z undoes;
+right-click to pin or copy it; Ctrl+wheel or +/- resizes the thumbnails. **Backspace** goes back
+to the last place, and **Delete** in the main window forgets the place you're on. The list is kept between sessions in `%LocalAppData%\Fractal\Places`, or in the
 folder named by the `FRACTAL_PLACES` environment variable if it is set.
 
 ## Building

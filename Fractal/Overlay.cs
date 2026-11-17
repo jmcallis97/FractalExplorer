@@ -158,6 +158,7 @@ internal sealed class Overlay(ColourState colours) : IDisposable
         "  Esc                 Stop a snap zoom\n" +
         "  L                   Places you've been (click one to go back; kept between sessions)\n" +
         "  Backspace           Back to the last place\n" +
+        "  Delete              Forget this place (removed from the list, not saved when you leave)\n" +
         "\n" +
         "COLOUR (instant — no recompute)\n" +
         "  P                   Palette picker (hover previews)\n" +

@@ -14,7 +14,7 @@ namespace Fractal;
 public sealed partial class MainForm
 {
     private const double PlaceDwellSeconds = 5;
-    private const int ThumbnailWidth = 384; // a tenth of a 4K window; never wider than the window
+    private const int ThumbnailWidth = 768; // a fifth of a 4K window (shown smaller); never wider than the window
 
     private PlaceStore _places = null!;
     private double? _placeArrived; // when a full render of the current view landed; null = not at a place yet
@@ -93,8 +93,25 @@ public sealed partial class MainForm
         // The view you're on goes in the list first, if it counts, so it's there to come back to.
         // (Leaving it later records it again, which just updates the entry.)
         if (AtPlace) RecordPlace();
-        using var dlg = new PlacesDialog(_places);
+        using var dlg = new PlacesDialog(_places, Bounds);
         if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Chosen is { } place) GoToPlace(place);
+    }
+
+    /// <summary>Takes the view you're on out of the places (if listed), and doesn't record it when you leave.</summary>
+    private void ForgetPlace()
+    {
+        _placeArrived = null;
+        _placeTouched = false;
+        var (x, y) = _view.CenterText(_view.Current());
+        try
+        {
+            bool removed = _places.RemoveNear(x, y, _view.Zoom);
+            ShowToast(removed ? "Removed this place from your places" : "This place won't be saved", 2);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ShowToast("Couldn't update your places: " + ex.Message, 4);
+        }
     }
 
     /// <summary>Back to the newest place that isn't where you are now.</summary>

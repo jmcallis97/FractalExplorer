@@ -40,7 +40,7 @@ internal sealed class Place
 /// </summary>
 internal sealed class PlaceStore
 {
-    public const int Capacity = 30;
+    public const int Capacity = 100;
 
     private static readonly JsonSerializerOptions Json = new()
     {
@@ -122,6 +122,28 @@ internal sealed class PlaceStore
         _places.Remove(place);
         DeleteThumbnail(place);
         Save();
+    }
+
+    /// <summary>Puts a removed place back at <paramref name="index"/> with its thumbnail file's bytes (undo).</summary>
+    public void Insert(int index, Place place, byte[]? png)
+    {
+        _places.Insert(Math.Clamp(index, 0, _places.Count), place);
+        Directory.CreateDirectory(_folder);
+        if (png != null) File.WriteAllBytes(ThumbnailPath(place), png);
+        Save();
+    }
+
+    /// <summary>Removes every listed place near the given view. False if there were none.</summary>
+    public bool RemoveNear(string re, string im, double zoom)
+    {
+        var near = _places.Where(p => IsNear(p, re, im, zoom)).ToList();
+        foreach (var p in near)
+        {
+            _places.Remove(p);
+            DeleteThumbnail(p);
+        }
+        if (near.Count > 0) Save();
+        return near.Count > 0;
     }
 
     public void SetPinned(Place place, bool pinned)
