@@ -70,7 +70,7 @@ static class SnapCommand
         }
         else
         {
-            Console.WriteLine($"Found a minibrot of period {r.Period}, about {r.MinibrotSize:G3} across.");
+            Console.WriteLine($"Found a minibrot of period {r.Period}, about {r.MinibrotSize:G3} across, {Snap.AngleText(r.TurnDegrees)}.");
             outZoom = zoom ?? Snap.SuggestedZoom(r);
         }
         Console.WriteLine($"It is {r.DistanceInViews:G3} view widths from your centre; Newton took {r.NewtonSteps} steps, {sw.Elapsed.TotalSeconds:0.0} s.");

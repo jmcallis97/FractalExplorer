@@ -27,8 +27,9 @@ public static class Snap
         BigFixed Re, BigFixed Im,
         double DistanceInViews,     // how far the exact point is from the given centre, in view widths
         double MultiplierAbs,       // Misiurewicz: zoom factor of one self-similar step
-        double TurnDegrees,         //              and the rotation that comes with it
-        double MinibrotSize,        // Nucleus: rough size of the minibrot (in the units of c)
+        double TurnDegrees,         //              and the rotation that comes with it; Nucleus: the minibrot's
+                                    //              angle to the whole set (anticlockwise, -180 to 180)
+        double MinibrotSize,        // Nucleus: rough width of the minibrot (in the units of c)
         int NewtonSteps);
 
     /// <summary>Zoom to stop at: as deep as the maths goes for a spiral, framing the minibrot otherwise.</summary>
@@ -39,7 +40,20 @@ public static class Snap
     public static string Describe(Result r) => r.Kind == Kind.Misiurewicz
         ? $"The eye of an endless spiral (Misiurewicz point, preperiod {r.Preperiod}, period {r.Period}).\n" +
           $"The picture repeats every {r.MultiplierAbs:G4}x of zoom, turned {r.TurnDegrees:0} degrees."
-        : $"A minibrot of period {r.Period}, about {r.MinibrotSize:G3} across.";
+        : $"A minibrot of period {r.Period}, about {r.MinibrotSize:G3} across, {AngleText(r.TurnDegrees)}.";
+
+    /// <summary>"upright", or how far a minibrot is turned from the whole set's orientation.</summary>
+    public static string AngleText(double degrees)
+    {
+        int d = (int)Math.Round(degrees);
+        return d switch
+        {
+            0 => "upright (turned 0°, like the whole set)",
+            180 or -180 => "upside down (turned 180°)",
+            > 0 => $"turned {d}° anticlockwise",
+            _ => $"turned {-d}° clockwise",
+        };
+    }
 
     /// <param name="targetBits">Fractional bits of the answer (about 3.32 per decimal digit).</param>
     public static Result? Find(Location loc, int maxIter, int targetBits, Action<string> log, out string why,
@@ -272,20 +286,27 @@ public static class Snap
         }, token, out int steps);
         if (c == null) return null;
 
-        // Minibrot size estimate (C. Heiland-Allen): l = Π 2z_j, b = Σ 1/Π 2z_j, size = 1/(b l²).
+        // Near its nucleus a minibrot is the whole set scaled and turned: c ≈ nucleus + λ·C, with
+        // (C. Heiland-Allen) λ = 1/(b l²), l = Π 2z_j, b = 1 + Σ 1/Π_{i≤j} 2z_i (j = 1..p-1).
+        // |λ| is its scale (the whole set is about 2.5 wide) and arg λ its angle. Checked against
+        // the minibrots' own period-2 and period-3 bulbs, which land at nucleus + λ·(-1) and
+        // nucleus + λ·(-0.1226 ± 0.7449i), where the whole set has them.
         var orb = Orbit(c.Value, p);
-        double lLog = 0; Complex b = Complex.Zero, prod = Complex.One;
+        double lLog = 0, lArg = 0; Complex b = Complex.One, prod = Complex.One;
         bool bDone = false;
         for (int j = 1; j < p; j++)
         {
             lLog += Math.Log((2 * orb[j]).Magnitude);
+            lArg += (2 * orb[j]).Phase;
             if (bDone) continue;
             prod *= 2 * orb[j];
             if (prod.Magnitude > 1e200) { bDone = true; continue; } // further terms of b are negligible
             b += 1 / prod;
         }
-        double size = p == 1 ? 2.5 : Math.Exp(-(Math.Log(b.Magnitude) + 2 * lLog)); // period 1: the whole set
-        return new Result(Kind.Nucleus, 0, p, c.Value.R, c.Value.I, Distance(c.Value, c0) / viewWidth, 0, 0, size, steps);
+        const double wholeSetWidth = 2.5;
+        double size = wholeSetWidth * Math.Exp(-(Math.Log(b.Magnitude) + 2 * lLog)); // l and b are 1 at period 1: the whole set
+        double angle = Math.IEEERemainder(-(b.Phase + 2 * lArg) * 180 / Math.PI, 360);
+        return new Result(Kind.Nucleus, 0, p, c.Value.R, c.Value.I, Distance(c.Value, c0) / viewWidth, 0, angle, size, steps);
     }
 
     /// <summary>
