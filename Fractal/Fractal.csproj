@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <!-- The whole set, rendered by tools/make_icon.py. -->
     <ApplicationIcon>Assets/fractal.ico</ApplicationIcon>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <Product>Fractal Explorer</Product>
   </PropertyGroup>
 
