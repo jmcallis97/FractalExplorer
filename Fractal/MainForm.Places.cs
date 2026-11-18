@@ -183,7 +183,9 @@ public sealed partial class MainForm
         _colours.SetDensity(p.Density);
         _colours.SetOffset(p.Offset);
         SetEffects(p.Effects ?? Effects.None);
-        _arrivalFloor = p.Floor ?? 0; // the floor it was seen with (places from before floors counted from 0)
+        // The floor it was seen with; places saved before floors get the old mapping.
+        _arrivalFloor = p.Floor;
+        _arrivalLegacy = p.Floor == null;
         if (p.Effects?.NeedsExtra == true) _extraWhenRendered = true; // saved with effects that need them
         UpdateExtraStatus();
         Recolor();

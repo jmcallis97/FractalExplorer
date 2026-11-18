@@ -216,14 +216,31 @@ public sealed partial class MainForm : Form
     // then kept while you pan or change iterations, so colours don't shift under you.
     private ColourScale? _colourScale;
     private Viewport? _colourScaleView;
-    private double? _arrivalFloor; // a place's saved floor, for when its render lands
+    private double? _arrivalFloor;  // a place's saved floor, for when its render lands
+    private bool _arrivalLegacy;    // ...or a place saved before floors: the old mapping
 
     private void UpdateColourScale(Field target)
     {
-        if (_colourScale != null && _colourScaleView is { } v && v.SameGrid(target.View) && _arrivalFloor == null) return;
-        _colourScale = ColourScale.From(target, _arrivalFloor);
-        _colourScaleView = target.View;
+        bool arriving = _arrivalFloor != null || _arrivalLegacy;
+        if (_colourScale != null && _colourScaleView is { } v && v.SameGrid(target.View) && !arriving) return;
+        var old = _colourScale;
+        var scale = ColourScale.From(target, _arrivalFloor, _arrivalLegacy);
         _arrivalFloor = null;
+        _arrivalLegacy = false;
+
+        // Leaving an old place for a new view switches Sqrt and Log from the old mapping to the
+        // floor-relative one, where the same density means something else. Keep the picture
+        // about as busy as it was: scale density by how the spread of this view maps under each.
+        if (old is { Legacy: true } && scale is { Legacy: false } && _colours.Mapping is ColorMapping.Sqrt or ColorMapping.Log)
+        {
+            var m = _colours.Mapping;
+            double lo = scale.Percentile(0.01), hi = scale.Percentile(0.99);
+            double before = Colorizer.Map(m, hi, old) - Colorizer.Map(m, lo, old);
+            double after = Colorizer.Map(m, hi, scale) - Colorizer.Map(m, lo, scale);
+            if (before > 0 && after > 0) _colours.SetDensity(_colours.Density * before / after);
+        }
+        _colourScale = scale;
+        _colourScaleView = target.View;
     }
 
     private void OnTick(object? sender, EventArgs e)

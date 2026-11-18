@@ -5,9 +5,9 @@ public enum ColorMapping
 {
     /// <summary>Evenly spaced bands. Great when shallow; can get noisy very deep.</summary>
     Linear,
-    /// <summary>Bands widen with the iterations above the view's floor. A good all-rounder.</summary>
+    /// <summary>Bands widen with the iterations above the view's floor (past its typical spread). A good all-rounder.</summary>
     Sqrt,
-    /// <summary>Bands widen a lot with the iterations above the view's floor. Calms down busy areas.</summary>
+    /// <summary>Bands widen a lot with the iterations above the view's floor (past its typical spread). Calms down busy areas.</summary>
     Log,
     /// <summary>
     /// By rank: each colour gets an equal share of the pixels on screen, whatever the spread of
@@ -27,16 +27,21 @@ public static class Colorizer
 
     /// <summary>
     /// Position on the palette before density and offset, in palette cycles. Sqrt and Log count
-    /// from <paramref name="scale"/>'s floor (from 0 without one); Equalize needs a scale (and is
-    /// Linear without one). Linear doesn't use the floor: subtracting it would only rotate the palette.
+    /// from <paramref name="scale"/>'s floor and bend at its knee (without a scale: from 0, knee
+    /// 1, as they always did); Equalize needs a scale (and is Linear without one). Linear doesn't
+    /// use the floor: subtracting it would only rotate the palette.
     /// </summary>
     public static double Map(ColorMapping mapping, double s, ColourScale? scale)
     {
         double above = Math.Max(0, s - (scale?.Floor ?? 0));
+        double knee = scale?.Knee ?? 1;
         return mapping switch
         {
-            ColorMapping.Sqrt => Math.Sqrt(above) * 0.25,
-            ColorMapping.Log => Math.Log(above + 1) * 0.75,
+            // Both have a finite slope at the floor (1/(8·√knee) and 0.75/knee cycles per
+            // iteration): plain √x and ln x are vertical there, which at a high density turned
+            // the calm ground just above the floor into fine moiré stripes.
+            ColorMapping.Sqrt => (Math.Sqrt(above + knee) - Math.Sqrt(knee)) * 0.25,
+            ColorMapping.Log => Math.Log(1 + above / knee) * 0.75,
             ColorMapping.Equalize when scale != null => scale.Rank(s),
             _ => s * (1.0 / 64),
         };

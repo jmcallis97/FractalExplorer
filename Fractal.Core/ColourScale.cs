@@ -17,20 +17,38 @@ public sealed class ColourScale
     /// <summary>Sqrt and Log count iterations from here.</summary>
     public double Floor { get; }
 
+    /// <summary>
+    /// Where Sqrt and Log bend: a tenth of the view's range above the floor (to its 95th
+    /// percentile). Below it they are nearly linear, so the calm ground just above the floor
+    /// gets smooth bands rather than a palette per iteration; above it they compress the busy
+    /// top end. (The median won't do: in many views most pixels are calm ground within a few
+    /// iterations of the floor. The old Log was this with the knee at the floor itself, which
+    /// at depth compresses next to nothing.)
+    /// </summary>
+    public double Knee { get; }
+
+    /// <summary>
+    /// The mapping as it was before views had a floor (counting from 0, no knee), for places
+    /// saved then: they look as they did.
+    /// </summary>
+    public bool Legacy { get; }
+
     private readonly float[] _sorted; // a sample of the escaped values, ascending
 
-    private ColourScale(double floor, float[] sorted)
+    private ColourScale(double floor, double knee, bool legacy, float[] sorted)
     {
         Floor = floor;
+        Knee = knee;
+        Legacy = legacy;
         _sorted = sorted;
     }
 
     /// <summary>
     /// The scale of <paramref name="field"/>, with its floor replaced by <paramref name="floor"/>
-    /// if given (a place saved with its floor looks the same when you come back). Null if no
-    /// pixel escaped.
+    /// if given (a place saved with its floor looks the same when you come back), or the
+    /// <paramref name="legacy"/> mapping. Null if no pixel escaped.
     /// </summary>
-    public static ColourScale? From(Field field, double? floor = null)
+    public static ColourScale? From(Field field, double? floor = null, bool legacy = false)
     {
         var values = field.Values;
         int escaped = 0;
@@ -46,7 +64,10 @@ public sealed class ColourScale
             if (v >= 0 && k++ % stride == 0) sample.Add(v);
         var sorted = sample.ToArray();
         Array.Sort(sorted);
-        return new ColourScale(floor ?? min, sorted);
+        if (legacy) return new ColourScale(0, 1, true, sorted);
+        double f = floor ?? min;
+        double knee = Math.Max(1, (sorted[(int)(0.95 * (sorted.Length - 1))] - f) / 10);
+        return new ColourScale(f, knee, false, sorted);
     }
 
     /// <summary>Fraction of the view's escaped pixels below <paramref name="s"/> (0 to 1), interpolated between samples.</summary>
