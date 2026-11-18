@@ -58,16 +58,15 @@ public static class Colorizer
     }
 
     /// <param name="scale">The view's floor and distribution, for Sqrt, Log and Equalize (see <see cref="Map"/>).</param>
-    /// <param name="effects">Mirror, angle and inside-by-period are applied here (the rest come in <paramref name="shade"/>).</param>
+    /// <param name="effects">Mirror and inside-by-period are applied here (the rest come in <paramref name="shade"/>).</param>
     /// <param name="shade">Per-pixel brightness factors, or null; see <see cref="Effects.ShadeMap"/>.</param>
-    /// <param name="extra">The view's extra numbers, for the angle and inside-by-period effects (null: skipped).</param>
+    /// <param name="extra">The view's extra numbers, for the inside-by-period effect (null: skipped).</param>
     public static void Colorize(Field field, Palette palette, ColorMapping mapping,
                                 double density, double offset, int[] dest, int workers,
                                 bool showFilled = false, ColourScale? scale = null, Effects? effects = null,
                                 float[]? shade = null, ExtraField? extra = null)
     {
         bool mirror = effects?.Mirror == true;
-        double twist = effects?.Angle == true && extra != null ? effects.AngleStrength / (2 * Math.PI) : 0;
         bool periods = effects?.InsidePeriod == true && extra != null;
         var values = field.Values;
         var lut = palette.Lut;
@@ -94,7 +93,6 @@ public static class Colorizer
                     continue;
                 }
                 double t = Map(mapping, s, scale) * density + offset;
-                if (twist != 0 && !float.IsNaN(extra!.Angle[row + x])) t += extra.Angle[row + x] * twist;
                 t -= Math.Floor(t);
                 if (mirror) t = t < 0.5 ? 2 * t : 2 - 2 * t;
                 int idx = (int)(t * n);

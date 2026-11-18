@@ -44,13 +44,12 @@ places history (`%LocalAppData%\Fractal\Places`) as the starter gallery.
   and Equalize, which gives each colour an equal share of the pixels. **F** fits the density to
   the view. **V** opens the colour explorer: the view in 16 other colourings at once (click
   one to use it, right-click for more like it).
-- **Effects** (E), chosen per image and saved with places: relief lighting (the colours as a
-  landscape, lit from the side), outlines on fast-changing detail, and a mirrored palette
-  with no seam. They only recolour, so they're instant. A second group needs extra numbers per
-  pixel, computed only when you press Compute in the panel (about as long as a CPU render of
-  the view; seconds when shallow, a minute or two at 4K very deep): stripes (stripe average
-  colouring), angle (palette turned by the escape angle), binary decomposition, boundary lines
-  (distance estimate) and the inside coloured by period.
+- **Effects** (E), chosen per image and saved with places; the panel says what each does and
+  what it looks like. Instant: relief lighting (the colours as a landscape, lit from the side)
+  and a mirrored palette (no seam where it repeats). Computed for the view when ticked (about as
+  long as a CPU render of it: seconds when shallow, a minute or two at 4K very deep): stripes
+  (stripe-average colouring), binary decomposition, boundary lines (distance estimate) and the
+  inside coloured by period.
 
 Press **H** in the app for the full list of keys.
 

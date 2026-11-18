@@ -5,52 +5,44 @@ namespace Fractal;
 /// <summary>
 /// Optional effects laid over the colouring of one image (E in the app). The first group works
 /// from the rendered values alone, so turning them on or changing them never re-renders. The
-/// second group (stripes, angle, binary, boundary, inside by period) needs extra numbers per pixel
+/// second group (stripes, binary, boundary, inside by period) needs extra numbers per pixel
 /// (<see cref="ExtraField"/>), computed on request; until then they don't show.
 /// </summary>
 /// <param name="Relief">Light the image as if the iteration counts were the height of a landscape.</param>
 /// <param name="ReliefStrength">How steep that landscape is (1 = moderate).</param>
 /// <param name="LightAngle">Where the light comes from, in degrees: 0 = right, 90 = top, 135 = top left.</param>
-/// <param name="Outline">Darken where the values change fast: traces the filaments and edges.</param>
-/// <param name="OutlineStrength">How dark (1 = moderate).</param>
 /// <param name="Mirror">Run the palette forward then back, so it has no seam where it repeats.</param>
 /// <param name="Stripes">Ribbons along the filaments (stripe average colouring).</param>
 /// <param name="StripeStrength">How strong the ribbons are (1 = moderate).</param>
-/// <param name="Angle">Turn the palette by the angle at which each point escaped: swirls.</param>
-/// <param name="AngleStrength">How far (1 = once round the palette per turn).</param>
 /// <param name="Binary">Two-tone cells by the half-plane each point escaped into (binary decomposition).</param>
 /// <param name="Boundary">Crisp lines along the set's boundary (distance estimate).</param>
 /// <param name="BoundaryWidth">Line width, in pixels.</param>
 /// <param name="InsidePeriod">Colour the inside of the set by period (each bulb and minibrot by its own) instead of black.</param>
 public sealed record Effects(
     bool Relief = false, double ReliefStrength = 1, double LightAngle = 135,
-    bool Outline = false, double OutlineStrength = 1,
     bool Mirror = false,
     bool Stripes = false, double StripeStrength = 1,
-    bool Angle = false, double AngleStrength = 1,
     bool Binary = false,
-    bool Boundary = false, double BoundaryWidth = 1.5,
+    bool Boundary = false, double BoundaryWidth = 0.75,
     bool InsidePeriod = false)
 {
     public static readonly Effects None = new();
 
-    [JsonIgnore] public bool Any => Relief || Outline || Mirror || NeedsExtra;
+    [JsonIgnore] public bool Any => Relief || Mirror || NeedsExtra;
 
     /// <summary>True if an effect needs the extra numbers (<see cref="ExtraField"/>).</summary>
-    [JsonIgnore] public bool NeedsExtra => Stripes || Angle || Binary || Boundary || InsidePeriod;
+    [JsonIgnore] public bool NeedsExtra => Stripes || Binary || Boundary || InsidePeriod;
 
     /// <summary>True if <see cref="ShadeMap"/> has anything to do.</summary>
-    [JsonIgnore] public bool Shades => Relief || Outline || Stripes || Binary || Boundary;
+    [JsonIgnore] public bool Shades => Relief || Stripes || Binary || Boundary;
 
     /// <summary>"Relief, Outline", or "none".</summary>
     public override string ToString()
     {
         var on = new List<string>();
         if (Relief) on.Add("Relief");
-        if (Outline) on.Add("Outline");
         if (Mirror) on.Add("Mirror");
         if (Stripes) on.Add("Stripes");
-        if (Angle) on.Add("Angle");
         if (Binary) on.Add("Binary");
         if (Boundary) on.Add("Boundary");
         if (InsidePeriod) on.Add("Inside by period");
@@ -60,7 +52,7 @@ public sealed record Effects(
     private const double LightElevation = 45 * Math.PI / 180;
 
     /// <summary>
-    /// Brightness factor per pixel (1 = unchanged) for relief and outline, into
+    /// Brightness factor per pixel (1 = unchanged) for the shading effects, into
     /// <paramref name="dest"/>. The "height" is the position on the palette before it wraps
     /// (<see cref="Colorizer.Map"/>), so the landscape follows the colour bands you see. How steep
     /// that is varies enormously between views, so strengths are relative to this view's typical
@@ -84,7 +76,6 @@ public sealed record Effects(
 
         double typical = TypicalSlope(values, w, h, Height);
         double steep = 0.6 * ReliefStrength / typical;       // the median slope gets a gentle ~30 degrees
-        double ink = 0.01 * OutlineStrength;
 
         Parallel.For(0, h, new ParallelOptions { MaxDegreeOfParallelism = workers }, y =>
         {
@@ -101,13 +92,6 @@ public sealed record Effects(
                     double lambert = (nx * lx + ny * ly + lz) / Math.Sqrt(nx * nx + ny * ny + 1);
                     f *= Math.Clamp(0.15 + 0.85 * lambert / lz, 0.1, 1.6);
                 }
-                if (Outline)
-                {
-                    // Darkens where the slope is well above typical: filaments and edges, not smooth
-                    // ground. At most to a quarter, so busy dust is shaded rather than blacked out.
-                    double r = Math.Sqrt(gx * gx + gy * gy) / typical;
-                    f *= 0.25 + 0.75 / (1 + ink * r * r);
-                }
                 int i = row + x;
                 if (stripes && !float.IsNaN(extra!.Stripe[i]))
                     f *= Math.Max(0.05, 1 + 1.2 * StripeStrength * (Math.Clamp((extra.Stripe[i] - stripeLo) * stripeScale, 0, 1) - 0.5));
@@ -117,7 +101,7 @@ public sealed record Effects(
                 {
                     // Smoothstep from dark on the boundary to unchanged a line width away.
                     double d = Math.Clamp(extra!.Distance[i] / BoundaryWidth, 0, 1);
-                    f *= 0.1 + 0.9 * d * d * (3 - 2 * d);
+                    f *= 0.3 + 0.7 * d * d * (3 - 2 * d);
                 }
                 dest[row + x] = (float)f;
             }

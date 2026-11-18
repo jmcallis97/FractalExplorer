@@ -90,8 +90,8 @@ public sealed partial class MainForm
             C(Colour, "M", "Mapping: Linear / Sqrt / Log (from the view's floor) / Equalize (equal share of pixels)", NextMapping, Keys.M),
             C(Colour, "F", "Fit: density so the palette runs twice across this view", FitColours, Keys.F),
             C(Colour, "V", "Colour explorer: this view in other colourings (click one to use it)", ShowColourExplorer, Keys.V),
-            C(Colour, "E", "Effects for this image: relief, outlines, mirror; stripes, angle, binary, boundary\n" +
-                         "and inside-by-period (these compute extra numbers when you ask)", ToggleEffectsPanel, Keys.E),
+            C(Colour, "E", "Effects for this image: relief, mirror; stripes, binary, boundary, inside by period\n" +
+                         "(the last four compute extra numbers for the view when ticked)", ToggleEffectsPanel, Keys.E),
 
             C(Window, "F11 / Alt+Enter", "Fullscreen (or double-click; Esc exits)", ToggleFullScreen, Keys.F11, Keys.Alt | Keys.Enter),
             C(Window, "I", "Info on/off", () => { _showInfo = !_showInfo; Invalidate(); }, Keys.I),
@@ -267,6 +267,8 @@ public sealed partial class MainForm
             _colours.Effects = e;
             TouchPlace();
             Recolor();
+            // Ticking an effect that needs the extra numbers asks for them (with stripes, if ticked).
+            if (ExtraMissing(e)) ComputeExtra();
             UpdateExtraStatus();
         };
         panel.ComputeClicked += compute => { if (compute) ComputeExtra(); else CancelExtra(); };

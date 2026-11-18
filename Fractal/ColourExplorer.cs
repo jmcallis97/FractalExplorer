@@ -98,7 +98,7 @@ internal sealed class ColourExplorer : Form
         list.Add(b with { Density = b.Density * 2 });
         list.Add(b with { Offset = (b.Offset + 0.5) % 1 });
         list.Add(b with { Effects = b.Effects with { Relief = !b.Effects.Relief } });
-        list.Add(b with { Effects = b.Effects with { Outline = !b.Effects.Outline } });
+        list.Add(b with { Effects = b.Effects with { Relief = !b.Effects.Relief, Mirror = !b.Effects.Mirror } });
         list.Add(b with { Effects = b.Effects with { Mirror = !b.Effects.Mirror } });
         for (int i = 0; i < 2; i++) list.Add(b with { Palette = _makeRandom() });
         var others = _palettes.Where(p => p != b.Palette).OrderBy(_ => _rng.Next()).ToList();

@@ -16,6 +16,7 @@ public sealed partial class MainForm
     private readonly Stopwatch _extraClock = new();
     private double _extraSeconds;
     private bool _extraWhenRendered;           // compute once the current view's render lands
+    private bool _extraComputingStripes;       // the computation running includes stripes
 
     private void ComputeExtra()
     {
@@ -37,6 +38,7 @@ public sealed partial class MainForm
         var v = field.View;
         var values = field.Values.ToArray(); // the field's buffer is reused for later renders
         bool stripes = _colours.Effects.Stripes;
+        _extraComputingStripes = stripes;
         var renderer = _renderer;
         int workers = _renderer.WorkerCount;
         Task.Run(() =>
@@ -71,10 +73,31 @@ public sealed partial class MainForm
         UpdateExtraStatus();
     }
 
+    /// <summary>
+    /// True if <paramref name="e"/> needs extra numbers this view doesn't have (or isn't already
+    /// computing): none at all, or no stripes when Stripes is on.
+    /// </summary>
+    private bool ExtraMissing(Effects e)
+    {
+        if (!e.NeedsExtra) return false;
+        if (_extraProgress != null || _extraWhenRendered) return e.Stripes && !_extraComputingStripes;
+        bool have = _extra != null && _baseLayer.Field?.View == _extra.View;
+        return !have || (e.Stripes && !_extra!.HasStripes);
+    }
+
     /// <summary>After a render lands: start a computation that was waiting for it.</summary>
     private void MaybeComputeExtra(Field target)
     {
         if (_extraWhenRendered && target.View == _view.Current() && !_pipeline.IsRunning) ComputeExtra();
+    }
+
+    private (Field? Field, Viewport View, bool Inside) _insideCheck;
+
+    /// <summary>True if any pixel of <paramref name="f"/> is inside the set (remembered per image: the status updates often).</summary>
+    private bool HasInside(Field f)
+    {
+        if (_insideCheck.Field != f || _insideCheck.View != f.View) _insideCheck = (f, f.View, f.Values.Any(v => v < 0));
+        return _insideCheck.Inside;
     }
 
     /// <summary>What the Effects panel says about the extra numbers.</summary>
@@ -92,6 +115,8 @@ public sealed partial class MainForm
                    (e.Stripes && !_extra.HasStripes ? ".\nStripes weren't included: Compute again for them" : "");
         else
             text = e.NeedsExtra ? "Not computed for this view: press Compute" : "Not computed for this view";
+        if (e.InsidePeriod && _baseLayer.Field is { } f && !HasInside(f))
+            text += "\n(This view has no inside parts, so Inside by period has nothing to colour.)";
         _effectsPanel.SetStatus(text, _extraProgress != null || _extraWhenRendered);
     }
 }

@@ -4,7 +4,7 @@ namespace Fractal;
 
 /// <summary>
 /// Extra numbers per pixel of one view, for the effects that need more than the iteration
-/// count (stripes, angle, binary, boundary lines, atom domains). Computed on request by
+/// count (stripes, binary, boundary lines, inside by period). Computed on request by
 /// <see cref="ExtraRenderer"/>, since it takes about as long as a CPU render of the view again.
 /// </summary>
 public sealed class ExtraField(Viewport view, bool hasStripes)
