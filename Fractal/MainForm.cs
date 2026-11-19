@@ -211,8 +211,13 @@ public sealed partial class MainForm : Form
     // ---- Profile (Alt+click): the side view of one row ----
 
     private ProfileWindow? _profile;
+    private (Point Start, int EndX)? _profileDrag; // Alt+drag in progress
 
-    private void ShowProfile(Point p)
+    /// <summary>
+    /// Opens the profile of the row at <paramref name="p"/>, from there to <paramref name="xEnd"/>
+    /// (null: the whole row).
+    /// </summary>
+    private void ShowProfile(Point p, int? xEnd)
     {
         var cur = _view.Current();
         if (_baseLayer.Field is not { } field || !field.View.SameGrid(cur) || field.View.MaxIterations != cur.MaxIterations)
@@ -220,10 +225,34 @@ public sealed partial class MainForm : Form
             ShowToast("Wait for the render, then Alt+click");
             return;
         }
-        int row = (int)(p.Y + cur.OriginY - field.View.OriginY);
-        if (row < 0 || row >= field.View.Height) { ShowToast("That row isn't rendered yet"); return; }
+        var v = field.View;
+        int row = (int)(p.Y + cur.OriginY - v.OriginY);
+        int dx = (int)(cur.OriginX - v.OriginX); // screen x + dx = field column
+        int a = 0, b = v.Width;
+        if (xEnd is int e)
+        {
+            a = Math.Clamp(Math.Min(p.X, e) + dx, 0, v.Width);
+            b = Math.Clamp(Math.Max(p.X, e) + dx + 1, 0, v.Width);
+        }
+        if (row < 0 || row >= v.Height || b - a < 2) { ShowToast("That part isn't rendered yet"); return; }
+
+        int len = b - a;
+        var values = new float[len];
+        Array.Copy(field.Values, row * v.Width + a, values, 0, len);
+        // The same line, k samples per screen pixel: a one-row view on a grid k times finer.
+        Func<int, CancellationToken, float[]> refine = (k, token) =>
+        {
+            int n = len * k;
+            var fine = new Viewport(v.AnchorX, v.AnchorY, v.Scale / k, (v.OriginX + a) * k + n / 2, (v.OriginY + row) * k,
+                                    n, 1, v.MaxIterations, v.Deep);
+            var f = new Field(fine, new float[n]);
+            new MandelbrotRenderer { UseGpu = false, UseInteriorFill = false }.Render(f, null, new RenderProgress(), token);
+            return f.Values;
+        };
+
         _profile?.Close();
-        var w = new ProfileWindow(field, row, _colours.Active, _colours.Mapping, _colours.Density, _colours.Offset,
+        var w = new ProfileWindow(v, v.OriginY + row, v.OriginX + a, values, refine,
+                                  _colours.Active, _colours.Mapping, _colours.Density, _colours.Offset,
                                   _colourScale, _colours.Effects.Mirror, RectangleToScreen(ClientRectangle));
         w.FormClosed += (_, _) => { if (_profile == w) { _profile = null; Invalidate(); } };
         _profile = w;
@@ -231,13 +260,22 @@ public sealed partial class MainForm : Form
         Invalidate();
     }
 
-    /// <summary>The profiled row, marked across the view (while it is on screen).</summary>
+    /// <summary>The line being dragged, or the profiled one (while it is on screen), marked on the view.</summary>
     private void DrawProfileMarker(Graphics g, in Viewport cur)
     {
-        if (_profile is not { } pw || !pw.View.SameGrid(cur)) return;
+        if (_profileDrag is { } d)
+        {
+            DrawMarker(g, d.Start.Y, d.Start.X, d.EndX);
+            return;
+        }
+        if (_profile is not { } pw || !pw.Grid.SameGrid(cur)) return;
         int y = (int)(pw.GlobalRow - cur.OriginY);
         if (y < 0 || y >= ClientSize.Height) return;
-        int x0 = (int)(pw.View.OriginX - cur.OriginX), x1 = x0 + pw.View.Width;
+        DrawMarker(g, y, (int)(pw.GlobalX0 - cur.OriginX), (int)(pw.GlobalX1 - cur.OriginX));
+    }
+
+    private static void DrawMarker(Graphics g, int y, int x0, int x1)
+    {
         using var dark = new Pen(Color.FromArgb(160, 0, 0, 0), 3);
         using var light = new Pen(Color.White, 1);
         g.DrawLine(dark, x0, y, x1, y);

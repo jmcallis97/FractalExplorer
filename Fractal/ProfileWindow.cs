@@ -4,8 +4,9 @@ using System.Runtime.InteropServices;
 namespace Fractal;
 
 /// <summary>
-/// A side view of one row of the image (Alt+click): the cross-section through the escape-time
-/// landscape along that line. Across: the row, left to right, as on screen. Up: each point's
+/// A side view of a line across the image (Alt+click: the whole row; Alt+drag: part of it): the
+/// cross-section through the escape-time landscape along it. Across: the line, left to right,
+/// as on screen (a short line is computed again, finer, to fill the window). Up: each point's
 /// height, its escape time as coloured (the mapped iteration count, so a band of colour here is
 /// the same band on screen). A column is filled from the bottom up to its point's height, each
 /// level in the colour of that level: strata. Above it, black - that point had escaped by then.
@@ -16,9 +17,12 @@ internal sealed class ProfileWindow : Form
     private const int Footer = 22; // the text line under the picture
     private const int InsideGrey = unchecked((int)0xFF3A3A3A);
 
-    private readonly Viewport _view;
-    private readonly int _row;
-    private readonly float[] _values; // the row's smooth iteration counts (negative = inside)
+    private readonly Viewport _grid;           // the view the line was drawn on
+    private readonly long _globalRow, _globalX0, _globalX1;
+    private float[] _values;                   // smooth iteration counts along the line (negative = inside)
+    private readonly Func<int, CancellationToken, float[]>? _refine;
+    private readonly CancellationTokenSource _cts = new();
+    private int _fineness = 1;                 // samples per screen pixel
     private Palette _palette;
     private ColorMapping _mapping;
     private double _density, _offset;
@@ -32,17 +36,28 @@ internal sealed class ProfileWindow : Form
     private Bitmap? _bitmap;
     private string _hover = "";
 
-    /// <summary>The global grid row shown, for the marker on the main view.</summary>
-    public long GlobalRow => _view.OriginY + _row;
-    public Viewport View => _view;
+    /// <summary>The view the line was drawn on, and the line in its global grid: for the marker on the main view.</summary>
+    public Viewport Grid => _grid;
+    public long GlobalRow => _globalRow;
+    public long GlobalX0 => _globalX0;
+    public long GlobalX1 => _globalX1;
 
-    public ProfileWindow(Field field, int row, Palette palette, ColorMapping mapping, double density, double offset,
+    /// <param name="values">The line's values as rendered on screen, one per screen pixel.</param>
+    /// <param name="refine">
+    /// Computes the line again with k samples per screen pixel (values.Length·k of them), for a
+    /// short line spread across a wide window; null if it can't be.
+    /// </param>
+    public ProfileWindow(Viewport grid, long globalRow, long globalX0, float[] values,
+                         Func<int, CancellationToken, float[]>? refine,
+                         Palette palette, ColorMapping mapping, double density, double offset,
                          ColourScale? scale, bool mirror, Rectangle ownerArea)
     {
-        _view = field.View;
-        _row = row;
-        _values = new float[_view.Width];
-        Array.Copy(field.Values, row * _view.Width, _values, 0, _view.Width);
+        _grid = grid;
+        _globalRow = globalRow;
+        _globalX0 = globalX0;
+        _globalX1 = globalX0 + values.Length;
+        _values = values;
+        _refine = refine;
         _palette = palette;
         _mapping = mapping;
         _density = density;
@@ -50,7 +65,6 @@ internal sealed class ProfileWindow : Form
         _scale = scale;
         _mirror = mirror;
 
-        Text = "Profile";
         FormBorderStyle = FormBorderStyle.SizableToolWindow;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.Manual;
@@ -59,10 +73,42 @@ internal sealed class ProfileWindow : Form
         ForeColor = Color.Gainsboro;
         KeyPreview = true;
         MinimumSize = new Size(200, 120);
-        int w = Math.Min(_view.Width, ownerArea.Width - 40);
-        ClientSize = new Size(w, 320 + Footer);
+        ClientSize = new Size(Math.Min(2400, ownerArea.Width - 40), 320 + Footer);
         Location = new Point(ownerArea.Left + (ownerArea.Width - Width) / 2, ownerArea.Bottom - Height - 20);
+        UpdateTitle(false);
         Measure();
+    }
+
+    private void UpdateTitle(bool refining) =>
+        Text = $"Profile: {_values.Length / _fineness:N0} pixels of the row" +
+               (_fineness > 1 ? $", computed {_fineness}x finer" : "") + (refining ? " (computing finer...)" : "");
+
+    protected override void OnShown(EventArgs e)
+    {
+        base.OnShown(e);
+        // A short line spread across the window: compute it again with a sample per window pixel.
+        int k = Math.Min(64, (int)Math.Ceiling((double)ClientSize.Width / _values.Length));
+        if (_refine == null || k <= 1) return;
+        var token = _cts.Token;
+        UpdateTitle(true);
+        Task.Run(() => _refine(k, token), token).ContinueWith(t =>
+        {
+            if (t.IsCompletedSuccessfully && !IsDisposed) BeginInvoke(() =>
+            {
+                _values = t.Result;
+                _fineness = k;
+                Measure();
+                UpdateTitle(false);
+                Invalidate();
+            });
+            else if (!IsDisposed && !token.IsCancellationRequested) BeginInvoke(() => UpdateTitle(false));
+        }, TaskScheduler.Default);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        _cts.Cancel();
+        base.OnFormClosed(e);
     }
 
     /// <summary>The main view's colours changed: follow them.</summary>
@@ -166,7 +212,7 @@ internal sealed class ProfileWindow : Form
         if (w <= 0) return;
         int i = Math.Clamp((int)((long)e.X * _values.Length / w), 0, _values.Length - 1);
         float s = _values[i];
-        string text = $"Column {i}: " + (s < 0 || float.IsNaN(s) ? "inside the set (never escapes)" : $"{s:N1} iterations to escape");
+        string text = $"Pixel {i / (double)_fineness:0.##} along: " + (s < 0 || float.IsNaN(s) ? "inside the set (never escapes)" : $"{s:N1} iterations to escape");
         if (text != _hover) { _hover = text; Invalidate(new Rectangle(0, ClientSize.Height - Footer, w, Footer)); }
     }
 

@@ -50,7 +50,8 @@ places history (`%LocalAppData%\Fractal\Places`) as the starter gallery.
   long as a CPU render of it: seconds when shallow, a minute or two at 4K very deep): stripes
   (stripe-average colouring), binary decomposition, boundary lines (distance estimate) and the
   inside coloured by period.
-- **Profile** (Alt+click): the side view of the clicked row. Each point's height is its escape
+- **Profile** (Alt+click: the clicked row; Alt+drag: part of it, computed again finer to fill
+  the window): the side view of the line. Each point's height is its escape
   time as coloured, so the colours stack up as strata; points inside the set (they never
   escape) are grey columns off the top.
 

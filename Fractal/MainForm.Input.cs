@@ -70,7 +70,9 @@ public sealed partial class MainForm
             }
             if ((ModifierKeys & Keys.Alt) != 0)
             {
-                ShowProfile(e.Location);
+                _profileDrag = (e.Location, e.X); // the line follows the mouse; let go to see it
+                Capture = true;
+                Invalidate();
                 return;
             }
             StopDive();
@@ -109,6 +111,12 @@ public sealed partial class MainForm
     protected override void OnMouseMove(MouseEventArgs e)
     {
         base.OnMouseMove(e);
+        if (_profileDrag is { } pd)
+        {
+            _profileDrag = (pd.Start, e.X); // horizontal only, for now
+            Invalidate();
+            return;
+        }
         if (_dragging)
         {
             _view.PanX = _dragPanX0 - (e.X - _dragStart.X);
@@ -129,6 +137,13 @@ public sealed partial class MainForm
     protected override void OnMouseUp(MouseEventArgs e)
     {
         base.OnMouseUp(e);
+        if (e.Button == MouseButtons.Left && _profileDrag is { } pd)
+        {
+            _profileDrag = null;
+            // A click (barely moved): the whole row. A drag: just that part of it.
+            ShowProfile(pd.Start, Math.Abs(e.X - pd.Start.X) < 4 ? null : e.X);
+            return;
+        }
         if (e.Button == MouseButtons.Left && _dragging) EndDrag();
     }
 
@@ -136,6 +151,7 @@ public sealed partial class MainForm
     {
         base.OnMouseCaptureChanged(e);
         if (_dragging && !Capture) EndDrag();
+        if (_profileDrag != null && !Capture) { _profileDrag = null; Invalidate(); }
     }
 
     protected override void OnMouseLeave(EventArgs e)
