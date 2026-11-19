@@ -44,6 +44,7 @@ public sealed partial class MainForm
             Mouse(Navigation, "Wheel", "Zoom at cursor"),
             Mouse(Navigation, "Left-drag", "Pan (only new edges are computed)"),
             Mouse(Navigation, "Middle-click", "Centre on point"),
+            Mouse(Navigation, "Alt+click", "Profile: the side view of that row, height = iterations to escape"),
             new(Navigation, "Arrows / Shift", "Pan a step / a big step", [], null),
             C(Navigation, "", "", () => Pan(-Step(), 0), Keys.Left),
             C(Navigation, "", "", () => Pan(Step(), 0), Keys.Right),

@@ -204,7 +204,44 @@ public sealed partial class MainForm : Form
         ColorizeLayer(_baseLayer);
         ColorizeLayer(_previewLayer);
         ColorizeLayer(_partialLayer);
+        _profile?.SetColours(_colours.Active, _colours.Mapping, _colours.Density, _colours.Offset, _colourScale, _colours.Effects.Mirror);
         Invalidate();
+    }
+
+    // ---- Profile (Alt+click): the side view of one row ----
+
+    private ProfileWindow? _profile;
+
+    private void ShowProfile(Point p)
+    {
+        var cur = _view.Current();
+        if (_baseLayer.Field is not { } field || !field.View.SameGrid(cur) || field.View.MaxIterations != cur.MaxIterations)
+        {
+            ShowToast("Wait for the render, then Alt+click");
+            return;
+        }
+        int row = (int)(p.Y + cur.OriginY - field.View.OriginY);
+        if (row < 0 || row >= field.View.Height) { ShowToast("That row isn't rendered yet"); return; }
+        _profile?.Close();
+        var w = new ProfileWindow(field, row, _colours.Active, _colours.Mapping, _colours.Density, _colours.Offset,
+                                  _colourScale, _colours.Effects.Mirror, RectangleToScreen(ClientRectangle));
+        w.FormClosed += (_, _) => { if (_profile == w) { _profile = null; Invalidate(); } };
+        _profile = w;
+        w.Show(this);
+        Invalidate();
+    }
+
+    /// <summary>The profiled row, marked across the view (while it is on screen).</summary>
+    private void DrawProfileMarker(Graphics g, in Viewport cur)
+    {
+        if (_profile is not { } pw || !pw.View.SameGrid(cur)) return;
+        int y = (int)(pw.GlobalRow - cur.OriginY);
+        if (y < 0 || y >= ClientSize.Height) return;
+        int x0 = (int)(pw.View.OriginX - cur.OriginX), x1 = x0 + pw.View.Width;
+        using var dark = new Pen(Color.FromArgb(160, 0, 0, 0), 3);
+        using var light = new Pen(Color.White, 1);
+        g.DrawLine(dark, x0, y, x1, y);
+        g.DrawLine(light, x0, y, x1, y);
     }
 
     private void ColorizeLayer(DisplayLayer layer) =>
@@ -298,6 +335,8 @@ public sealed partial class MainForm : Form
             try { layer.Draw(g, cur); }
             catch (Exception ex) when (ex is OverflowException or ArgumentException or ExternalException) { }
         }
+
+        DrawProfileMarker(g, cur);
 
         double? progress = _pipeline.Progress != null && _pipeline.RunningSeconds > NoticeableSeconds
             ? _pipeline.Progress.Fraction : null;

@@ -68,6 +68,11 @@ public sealed partial class MainForm
                 if (hit >= 0) SelectPalette(hit);
                 return;
             }
+            if ((ModifierKeys & Keys.Alt) != 0)
+            {
+                ShowProfile(e.Location);
+                return;
+            }
             StopDive();
             if ((ModifierKeys & Keys.Control) != 0)
             {
